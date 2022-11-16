@@ -1,7 +1,8 @@
 # Linkless Link Prediction via Relational Distillation
 
 ## Introduction
-This repository contains the source code for the paper: [Linkless Link Prediction via Relational Distillation](https://arxiv.org/pdf/2210.05801.pdf) 
+This repository contains the source code for the paper: Linkless Link Prediction via Relational Distillation
+<!-- This repository contains the source code for the paper: [Linkless Link Prediction via Relational Distillation](https://arxiv.org/pdf/2210.05801.pdf)  -->
 <img width="1209" alt="image" src="https://user-images.githubusercontent.com/69767476/193711518-fdc8c163-7bbc-4118-ad55-75835954d2c7.png">
 
 ## Create the environment
