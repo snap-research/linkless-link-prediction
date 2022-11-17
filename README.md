@@ -22,7 +22,7 @@ python inductive_splitting_node.py
 
 ## Run LLP
 ### Transductive Setting
-- Supervised training. We can change "sage" to "mlp" to obtain supervised training results by MLP.
+- Supervised training. We can change "sage" to "mlp" to obtain supervised training results with MLP.
 ```
 python main_sp.py --datasets=cora --encoder=sage 
 ```
@@ -31,7 +31,7 @@ python main_sp.py --datasets=cora --encoder=sage
 python main.py --datasets=cora --KD_kl=1 --KD_r=1 --True_label=1
 ```
 ### Production Setting
-- Supervised training. We can change "sage" to "mlp" to obtain the supervised training results by MLP.
+- Supervised training. We can change "sage" to "mlp" to obtain the supervised training results with MLP.
 ```
 python main_sp_production.py --datasets=cora --encoder=sage 
 ```
