@@ -22,20 +22,20 @@ python inductive_splitting_node.py
 
 ## Run LLP
 ### Transductive Setting
-- Supervised training. We can change "sage" to "mlp" to obtain supervised training results with MLP.
+- **Teacher GNN training.** We can change "sage" to "mlp" to obtain supervised training results with MLP.
 ```
 python main_sp.py --datasets=cora --encoder=sage 
 ```
-- LLP training under the **transductive** setting. KD_kl and KD_r indicate the weights for the distribution-based and rank-based matching KD, respectively.
+- **Student MLP training.** KD_kl and KD_r indicate the weights for the distribution-based and rank-based matching KD, respectively.
 ```
 python main.py --datasets=cora --KD_kl=1 --KD_r=1 --True_label=1
 ```
 ### Production Setting
-- Supervised training. We can change "sage" to "mlp" to obtain the supervised training results with MLP.
+- **Teacher GNN training.** We can change "sage" to "mlp" to obtain the supervised training results with MLP.
 ```
 python main_sp_production.py --datasets=cora --encoder=sage 
 ```
-- LLP training. KD_kl and KD_r indicate the weights for the distribution-based and rank-based matching KD, respectively.
+- **Student MLP training.** KD_kl and KD_r indicate the weights for the distribution-based and rank-based matching KD, respectively.
 ```
 python main_production.py --datasets=cora --KD_kl=1 --KD_r=1 --True_label=1
 ```
