@@ -25,11 +25,11 @@ class Logger(object):
             best_results = []
             for r in self.results:
                 r = 100 * torch.tensor(r)
-                val = r[r[:, 1].argmax(), 0].item()
-                test = r[r[:, 1].argmax(), 1].item()
-                old_old = r[r[:, 1].argmax(), 2].item()
-                old_new = r[r[:, 1].argmax(), 3].item()
-                new_new = r[r[:, 1].argmax(), 4].item()
+                val = r[r[:, 0].argmax(), 0].item()
+                test = r[r[:, 0].argmax(), 1].item()
+                old_old = r[r[:, 0].argmax(), 2].item()
+                old_new = r[r[:, 0].argmax(), 3].item()
+                new_new = r[r[:, 0].argmax(), 4].item()
                 best_results.append((val, test, old_old, old_new, new_new))
 
             best_result = torch.tensor(best_results)

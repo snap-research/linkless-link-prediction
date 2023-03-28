@@ -8,6 +8,7 @@ from torch_geometric.utils import negative_sampling
 import numpy as np
 
 import torch_geometric.transforms as T
+import torch_geometric
 
 from ogb.linkproppred import PygLinkPropPredDataset, Evaluator
 
@@ -48,16 +49,15 @@ def neighbor_samplers(row, col, sample, x, step, ps_method, ns_rate, hops):
                 pos_batch = random_walk(row, col, batch, walk_length=hops,
                                     coalesced=False)
             else:
-                # print(torch.reshape(random_walk(row, col, batch, walk_length=1,coalesced=False)[:,1], (-1,1)))
                 pos_batch = torch.cat((pos_batch, random_walk(row, col, batch, walk_length=hops,coalesced=False)[:,1:]), 1)
 
     neg_batch = torch.randint(0, x.size(0), (batch.numel(), step*hops*ns_rate),
                                   dtype=torch.long)
 
-    return pos_batch.to(x.device), neg_batch.to(x.device)
+    return pos_batch.to("cuda"), neg_batch.to("cuda")
 
-def train(model, predictor, teacher_model, teacher_predictor, training_data,
-                         optimizer, args):
+def train(model, predictor, t_h, teacher_predictor, training_data,
+                         optimizer, args, device):
     pos_train_edge = training_data.edge_index.t()
     row, col = training_data.edge_index
 
@@ -76,58 +76,59 @@ def train(model, predictor, teacher_model, teacher_predictor, training_data,
     for link_perm in DataLoader(range(pos_train_edge.size(0)), args.link_batch_size, shuffle=True):
         optimizer.zero_grad()
 
-        node_perm = next(node_loader).to(training_data.x.device)
+        node_perm = next(node_loader)
 
-        h = model(training_data.x)
-        t_h = teacher_model(training_data.x, training_data.edge_index)
         edge = pos_train_edge[link_perm].t()
 
-        if args.KD_r or args.KD_kl:
-            sample_step = args.rw_step
-            pos_sample, neg_sample = neighbor_samplers(row, col, node_perm, training_data.x, sample_step, args.ps_method, args.ns_rate, args.hops)
+        neg_edge = negative_sampling(edge_index, num_nodes=training_data.x.size(0),
+                                num_neg_samples=link_perm.size(0), method='dense')
+        
+        train_edges = torch.cat((edge, neg_edge), dim=-1).to(device)
 
-            ### calculate the distribution based matching loss 
-            samples = torch.cat((pos_sample, neg_sample), 1)
-            batch_emb = torch.reshape(h[samples[:,0]], (samples[:,0].size(0), 1, h.size(1))).repeat(1,sample_step*args.hops*(1+args.ns_rate),1)
-            t_emb = torch.reshape(t_h[samples[:,0]], (samples[:,0].size(0), 1, h.size(1))).repeat(1,sample_step*args.hops*(1+args.ns_rate),1)
-            s_r = predictor(batch_emb, h[samples[:, 1:]])
-            t_r = teacher_predictor(t_emb, t_h[samples[:, 1:]])
-            kd_rank_loss = KD_rank(torch.reshape(s_r, (s_r.size()[0], s_r.size()[1])), torch.reshape(t_r, (t_r.size()[0], t_r.size()[1])), 1)
+        src = train_edges[0]
+        dst = train_edges[1]
 
-            ### calculate the rank based matching loss
-            rank_loss = torch.tensor(0.0).to("cuda")
-            import itertools
-            this_list = [l_i for l_i in range(sample_step*args.hops*(1+args.ns_rate))]
-            dim_pairs = [x for x in itertools.combinations(this_list, r=2)]
-            dim_pairs = np.array(dim_pairs).T
-            teacher_rl = torch.zeros((len(t_r), dim_pairs.shape[1],1)).to(t_r.device)
-                      
-            mask = t_r[:, dim_pairs[0]] > (t_r[:, dim_pairs[1]] + args.margin)
-            teacher_rl[mask] = 1
-            mask2 = t_r[:, dim_pairs[0]] < (t_r[:, dim_pairs[1]] - args.margin)
-            teacher_rl[mask2] = -1
-            first_rl = s_r[:, dim_pairs[0]].squeeze()
-            second_rl = s_r[:, dim_pairs[1]].squeeze()
-            rank_loss = margin_rank_loss(first_rl, second_rl, teacher_rl.squeeze())
-       
-        if args.datasets != "collab":
-            neg_edge = negative_sampling(edge_index, num_nodes=training_data.x.size(0),
-                                 num_neg_samples=link_perm.size(0), method='dense')
-        elif args.datasets == "collab":
-            neg_edge = torch.randint(0, training_data.x.size()[0], [edge.size(0), edge.size(1)], dtype=torch.long, device=h.device)
+        ### calculate the kl-divergence loss 
+        sample_step = args.rw_step
+        pos_sample, neg_sample = neighbor_samplers(row, col, node_perm, training_data.x, sample_step, args.ps_method, args.ns_rate, args.hops)
 
-        ### True_label loss  
-        train_edges = torch.cat((edge, neg_edge), dim=-1)
+        samples = torch.cat((pos_sample, neg_sample), 1)
+
+        this_target = torch.cat((torch.reshape(samples, (-1,)), src, dst), 0)
+        h = model(training_data.x[this_target].to(device))
+
+        for_loss = torch.reshape(h[:samples.size(0) * samples.size(1)], (samples.size(0), samples.size(1), args.hidden_channels))
+        src_h = h[samples.size(0) * samples.size(1): samples.size(0) * samples.size(1)+src.size(0)]
+        dst_h = h[samples.size(0) * samples.size(1)+src.size(0): ]
+
+        batch_emb = torch.reshape(for_loss[:,0,:], (samples[:,0].size(0), 1, h.size(1))).repeat(1,sample_step*args.hops*(1+args.ns_rate),1)
+        t_emb = torch.reshape(t_h[samples[:,0]].to(device), (samples[:,0].size(0), 1, t_h.size(1))).repeat(1,sample_step*args.hops*(1+args.ns_rate),1)
+        s_r = predictor(batch_emb, for_loss[:,1:,:])
+        t_r = teacher_predictor(t_emb, t_h[samples[:, 1:]].to(device))
+        kd_rank_loss = KD_rank(torch.reshape(s_r, (s_r.size()[0], s_r.size()[1])), torch.reshape(t_r, (t_r.size()[0], t_r.size()[1])), 1)
+
+        rank_loss = torch.tensor(0.0).to(device)
+        import itertools
+        this_list = [l_i for l_i in range(sample_step*args.hops*(1+args.ns_rate))]
+        dim_pairs = [x for x in itertools.combinations(this_list, r=2)]
+        dim_pairs = np.array(dim_pairs).T
+        teacher_rl = torch.zeros((len(t_r), dim_pairs.shape[1],1)).to(device)
+                    
+        mask = t_r[:, dim_pairs[0]] > (t_r[:, dim_pairs[1]] + args.margin)
+        teacher_rl[mask] = 1
+        mask2 = t_r[:, dim_pairs[0]] < (t_r[:, dim_pairs[1]] - args.margin)
+        teacher_rl[mask2] = -1
+        first_rl = s_r[:, dim_pairs[0]].squeeze()
+        second_rl = s_r[:, dim_pairs[1]].squeeze()
+        rank_loss = margin_rank_loss(first_rl, second_rl, teacher_rl.squeeze())
+        
+
         train_label = torch.cat((torch.ones(edge.size()[1]), torch.zeros(neg_edge.size()[1])), dim=0).to(h.device)
-        out = predictor(h[train_edges[0]], h[train_edges[1]]).squeeze()
+        out = predictor(src_h, dst_h).squeeze()
         label_loss = criterion(out, train_label)
        
-        t_out = teacher_predictor(t_h[train_edges[0]], t_h[train_edges[1]]).squeeze().detach()
-
         if args.KD_kl or args.KD_r:
-            loss = args.True_label * label_loss + args.KD_f * KD_cosine(h[node_perm], t_h[node_perm]) + args.KD_p * mse_loss(out, t_out) + args.KD_kl * kd_rank_loss + args.KD_r * rank_loss
-        else:
-            loss = args.True_label * label_loss + args.KD_f * KD_cosine(h[node_perm], t_h[node_perm]) + args.KD_p * mse_loss(out, t_out)
+            loss = args.True_label * label_loss + args.KD_kl * kd_rank_loss + args.KD_r * rank_loss
 
         loss.backward()
 
@@ -205,57 +206,30 @@ def test(model, predictor, val_data, inference_data, test_edge_bundle, negative_
     neg_test_pred = torch.cat(neg_test_preds, dim=0)
 
     results = {}
-    if dataset != "collab":
-        for K in [10, 20, 30, 50]:
-            evaluator.K = K
-            val_hits = evaluator.eval({
-                'y_pred_pos': pos_valid_pred,
-                'y_pred_neg': neg_pred,
-            })[f'hits@{K}']
-            test_hits = evaluator.eval({
-                'y_pred_pos': pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            old_old_test_hits = evaluator.eval({
-                'y_pred_pos': old_old_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            old_new_test_hits = evaluator.eval({
-                'y_pred_pos': old_new_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            new_new_test_hits = evaluator.eval({
-                'y_pred_pos': new_new_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
+    for K in [10, 20, 30, 50]:
+        evaluator.K = K
+        val_hits = evaluator.eval({
+            'y_pred_pos': pos_valid_pred,
+            'y_pred_neg': neg_pred,
+        })[f'hits@{K}']
+        test_hits = evaluator.eval({
+            'y_pred_pos': pos_test_pred,
+            'y_pred_neg': neg_test_pred,
+        })[f'hits@{K}']
+        old_old_test_hits = evaluator.eval({
+            'y_pred_pos': old_old_pos_test_pred,
+            'y_pred_neg': neg_test_pred,
+        })[f'hits@{K}']
+        old_new_test_hits = evaluator.eval({
+            'y_pred_pos': old_new_pos_test_pred,
+            'y_pred_neg': neg_test_pred,
+        })[f'hits@{K}']
+        new_new_test_hits = evaluator.eval({
+            'y_pred_pos': new_new_pos_test_pred,
+            'y_pred_neg': neg_test_pred,
+        })[f'hits@{K}']
 
-            results[f'Hits@{K}'] = (val_hits, test_hits, old_old_test_hits, old_new_test_hits, new_new_test_hits)
-
-    elif dataset == "collab":
-        for K in [10, 50, 100]:
-            evaluator.K = K
-            val_hits = evaluator.eval({
-                'y_pred_pos': pos_valid_pred,
-                'y_pred_neg': neg_pred,
-            })[f'hits@{K}']
-            test_hits = evaluator.eval({
-                'y_pred_pos': pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            old_old_test_hits = evaluator.eval({
-                'y_pred_pos': old_old_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            old_new_test_hits = evaluator.eval({
-                'y_pred_pos': old_new_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            new_new_test_hits = evaluator.eval({
-                'y_pred_pos': new_new_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-
-            results[f'Hits@{K}'] = (val_hits, test_hits, old_old_test_hits, old_new_test_hits, new_new_test_hits)
+        results[f'Hits@{K}'] = (val_hits, test_hits, old_old_test_hits, old_new_test_hits, new_new_test_hits)
 
     valid_result = torch.cat((torch.ones(pos_valid_pred.size()), torch.zeros(neg_pred.size())), dim=0)
     valid_pred = torch.cat((pos_valid_pred, neg_pred), dim=0)
@@ -289,93 +263,79 @@ def main():
     parser.add_argument('--lr', type=float, default=0.005)
     parser.add_argument('--epochs', type=int, default=20000)
     parser.add_argument('--eval_steps', type=int, default=5)
-    parser.add_argument('--runs', type=int, default=10)
-    parser.add_argument('--dataset_dir', type=str, default='./data')
-    parser.add_argument('--datasets', type=str, default='collab')
+    parser.add_argument('--runs', type=int, default=5)
+    parser.add_argument('--dataset_dir', type=str, default='../data')
+    parser.add_argument('--datasets', type=str, default='cora')
     parser.add_argument('--predictor', type=str, default='mlp')  ##inner/mlp
     parser.add_argument('--patience', type=int, default=100, help='number of patience steps for early stopping')
     parser.add_argument('--metric', type=str, default='Hits@50', choices=['auc', 'hits@20', 'hits@50'], help='main evaluation metric')
     parser.add_argument('--use_valedges_as_input', action='store_true')
-    parser.add_argument('--True_label', default=1000, type=float) #true_label loss
-    parser.add_argument('--KD_f', default=0, type=float) #Representation-based matching KD
-    parser.add_argument('--KD_p', default=0, type=float) #logit-based matching KD
-    parser.add_argument('--KD_kl', default=0.1, type=float) #distribution-based matching kd
-    parser.add_argument('--KD_r', default=100, type=float) #rank-based matching kd
-    parser.add_argument('--margin', default=0.1, type=float) #margin for rank-based kd
-    parser.add_argument('--rw_step', type=int, default=3) # nearby nodes sampled times
-    parser.add_argument('--ns_rate', type=int, default=5) # # randomly sampled rate over # nearby nodes
-    parser.add_argument('--hops', type=int, default=2) # random_walk step for each sampling time
-    parser.add_argument('--ps_method', type=str, default='nb') # positive sampling is rw or nb
+    parser.add_argument('--True_label', default=0, type=float) #true_label loss
+    parser.add_argument('--KD_f', default=0, type=float) #feature-based kd
+    parser.add_argument('--KD_p', default=0, type=float) #predict-score kd
+    parser.add_argument('--KD_kl', default=1, type=float) #kl_rank-based kd
+    parser.add_argument('--KD_r', default=1, type=float) #rank-based kd
+    parser.add_argument('--margin', default=0.1, type=float) #rank-based kd
+    # parser.add_argument('--KD_r_samp', default=10, type=int) #kl_rank-based kd
+    parser.add_argument('--rw_step', type=int, default=3)
+    parser.add_argument('--ns_rate', type=int, default=5)
+    parser.add_argument('--hops', type=int, default=3)
+    parser.add_argument('--ps_method', type=str, default='nb') ## positive sampling is rw or nb
 
     args = parser.parse_args()
     print(args)
 
+    this_file = "../results/" + args.datasets + "_KD_production.txt"
+    file = open(this_file, "a")
+    file.write(str(args)+"\n")
+    file.write("LLP (Relational Distillation) Minibatch\n")
+    file.close()
+
+    torch_geometric.seed.seed_everything(12345)
+
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    #### prepare the datasets
-    if args.datasets != "cora" and args.datasets != "citeseer":
-        training_data, val_data, inference_data, data, test_edge_bundle, negative_samples = torch.load("data/" + args.datasets + "_inductive_10.pkl")
-    else:
-        training_data, val_data, inference_data, data, test_edge_bundle, negative_samples = torch.load("data/" + args.datasets + "_inductive.pkl")
-        
+    training_data, val_data, inference_data, data, test_edge_bundle, negative_samples = torch.load("data/" + args.datasets + "_production.pkl")
+    
     input_size = training_data.x.size(1)
-    if args.datasets != "collab":
-        args.metric = 'Hits@50'
-    else:
-        args.metric = 'Hits@50'
 
-    training_data.to(device)
+    training_data
     val_data.to(device)
     inference_data.to(device)
 
     args.node_batch_size = int(training_data.x.size()[0] / (training_data.edge_index.size(1) / args.link_batch_size))
 
-    ### prepare the student and teacher models
     model = MLP(args.num_layers, input_size, args.hidden_channels, args.hidden_channels, args.dropout).to(device)
 
     predictor = LinkPredictor(args.predictor, args.hidden_channels, args.hidden_channels, 1,
                               args.num_layers, args.dropout).to(device)
-
-    # prepare teacher model
-    teacher_model = SAGE(args.datasets, input_size, args.hidden_channels,
-                     args.hidden_channels, args.num_layers,
-                     args.dropout).to(device)
     
-   
-    pretrained_model = torch.load("saved_models/" + args.datasets + "-sage-inductive.pkl", device)    
-    teacher_model.load_state_dict(pretrained_model['gnn'], strict=True)
-    teacher_predictor = Teacher_LinkPredictor(args.predictor, args.hidden_channels, args.hidden_channels, 1,
-                              args.num_layers, args.dropout).to(device)
+    pretrained_model = torch.load("../saved_models/" + args.datasets + "-sage_production.pkl")
+    
+    teacher_predictor = Teacher_LinkPredictor(args.predictor, 256, 256, 1,
+                              2, 0.5)
     teacher_predictor.load_state_dict(pretrained_model['predictor'], strict=True)
-    teacher_model.to(device)
     teacher_predictor.to(device)
 
-    for para in teacher_model.parameters():
-        para.requires_grad=False
+    t_h = torch.load("../Saved_features/" + args.datasets + "-sage_production.pkl")
+    t_h = t_h['features']
+
     for para in teacher_predictor.parameters():
         para.requires_grad=False
 
     evaluator = Evaluator(name='ogbl-ddi')
-    if args.datasets != "collab":
-        loggers = {
-            'Hits@10': Logger(args.runs, args),
-            'Hits@20': Logger(args.runs, args),
-            'Hits@30': Logger(args.runs, args),
-            'Hits@50': Logger(args.runs, args),
-            'AUC': Logger(args.runs, args),
-        }
-    elif args.datasets == "collab":
-        loggers = {
-            'Hits@10': Logger(args.runs, args),
-            'Hits@50': Logger(args.runs, args),
-            'Hits@100': Logger(args.runs, args),
-            'AUC': Logger(args.runs, args),
-        }
+    loggers = {
+        'Hits@10': Logger(args.runs, args),
+        'Hits@20': Logger(args.runs, args),
+        'Hits@30': Logger(args.runs, args),
+        'Hits@50': Logger(args.runs, args),
+        'AUC': Logger(args.runs, args),
+    }
 
     val_max = 0.0
-
     for run in range(args.runs):
+        torch_geometric.seed.seed_everything(run+1)
         model.reset_parameters()
         predictor.reset_parameters()
         optimizer = torch.optim.Adam(
@@ -385,12 +345,12 @@ def main():
         cnt_wait = 0
         best_val = 0.0
         for epoch in range(1, 1 + args.epochs):
-            loss = train(model, predictor, teacher_model, teacher_predictor, training_data,
-                         optimizer, args)
+            loss = train(model, predictor, t_h, teacher_predictor, training_data,
+                         optimizer, args, device)
 
             results = test(model, predictor, val_data, inference_data, test_edge_bundle, negative_samples,
                         evaluator, args.link_batch_size, args.encoder, args.datasets)
-          
+           
             if results[args.metric][0] >= best_val:
                 best_val = results[args.metric][0]
                 cnt_wait = 0
@@ -421,9 +381,35 @@ def main():
             print(key)
             loggers[key].print_statistics(run)
 
+    file = open(this_file, "a")
+    file.write(f'All runs:\n')
     for key in loggers.keys():
         print(key)
         loggers[key].print_statistics()
 
+        file.write(f'{key}:\n')
+        best_results = []
+        for r in loggers[key].results:
+            r = 100 * torch.tensor(r)
+            val = r[r[:, 0].argmax(), 0].item()
+            test_r = r[r[:, 0].argmax(), 1].item()
+            old_old = r[r[:, 0].argmax(), 2].item()
+            old_new = r[r[:, 0].argmax(), 3].item()
+            new_new = r[r[:, 0].argmax(), 4].item()
+            best_results.append((val, test_r, old_old, old_new, new_new))
+
+        best_result = torch.tensor(best_results)
+
+        r = best_result[:, 0]
+        file.write(f'  Final val: {r.mean():.2f} ± {r.std():.2f}')
+        r = best_result[:, 1]
+        file.write(f'   Final Test: {r.mean():.2f} ± {r.std():.2f}')
+        r = best_result[:, 2]
+        file.write(f'   Final old_old: {r.mean():.2f} ± {r.std():.2f}')
+        r = best_result[:, 3]
+        file.write(f'   Final old_new: {r.mean():.2f} ± {r.std():.2f}')
+        r = best_result[:, 4]
+        file.write(f'   Final new_new: {r.mean():.2f} ± {r.std():.2f}\n')
+    file.close()
 if __name__ == "__main__":
     main()

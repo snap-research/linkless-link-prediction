@@ -9,7 +9,7 @@ from torch_geometric.utils import negative_sampling
 import torch_geometric.transforms as T
 
 from ogb.linkproppred import PygLinkPropPredDataset, Evaluator
-from logger_inductive import Logger
+from logger_production import Logger
 
 from utils import get_dataset, do_edge_split
 from torch.nn import BCELoss
@@ -80,6 +80,8 @@ def test(model, predictor, val_data, inference_data, test_edge_bundle, negative_
     else:
         h = model(val_data.x, val_data.edge_index)
 
+    saved_h = h
+
     negative_edges = negative_samples.t().to(h.device)
     val_edges = val_data.edge_label_index.t()
     val_pos_edges = val_edges[val_data.edge_label.bool()]
@@ -137,57 +139,30 @@ def test(model, predictor, val_data, inference_data, test_edge_bundle, negative_
     neg_test_pred = torch.cat(neg_test_preds, dim=0)
 
     results = {}
-    if dataset != "collab":
-        for K in [10, 20, 30, 50]:
-            evaluator.K = K
-            val_hits = evaluator.eval({
-                'y_pred_pos': pos_valid_pred,
-                'y_pred_neg': neg_pred,
-            })[f'hits@{K}']
-            test_hits = evaluator.eval({
-                'y_pred_pos': pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            old_old_test_hits = evaluator.eval({
-                'y_pred_pos': old_old_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            old_new_test_hits = evaluator.eval({
-                'y_pred_pos': old_new_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            new_new_test_hits = evaluator.eval({
-                'y_pred_pos': new_new_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
+    for K in [10, 20, 30, 50]:
+        evaluator.K = K
+        val_hits = evaluator.eval({
+            'y_pred_pos': pos_valid_pred,
+            'y_pred_neg': neg_pred,
+        })[f'hits@{K}']
+        test_hits = evaluator.eval({
+            'y_pred_pos': pos_test_pred,
+            'y_pred_neg': neg_test_pred,
+        })[f'hits@{K}']
+        old_old_test_hits = evaluator.eval({
+            'y_pred_pos': old_old_pos_test_pred,
+            'y_pred_neg': neg_test_pred,
+        })[f'hits@{K}']
+        old_new_test_hits = evaluator.eval({
+            'y_pred_pos': old_new_pos_test_pred,
+            'y_pred_neg': neg_test_pred,
+        })[f'hits@{K}']
+        new_new_test_hits = evaluator.eval({
+            'y_pred_pos': new_new_pos_test_pred,
+            'y_pred_neg': neg_test_pred,
+        })[f'hits@{K}']
 
-            results[f'Hits@{K}'] = (val_hits, test_hits, old_old_test_hits, old_new_test_hits, new_new_test_hits)
-
-    elif dataset == "collab":
-        for K in [10, 50, 100]:
-            evaluator.K = K
-            val_hits = evaluator.eval({
-                'y_pred_pos': pos_valid_pred,
-                'y_pred_neg': neg_pred,
-            })[f'hits@{K}']
-            test_hits = evaluator.eval({
-                'y_pred_pos': pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            old_old_test_hits = evaluator.eval({
-                'y_pred_pos': old_old_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            old_new_test_hits = evaluator.eval({
-                'y_pred_pos': old_new_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-            new_new_test_hits = evaluator.eval({
-                'y_pred_pos': new_new_pos_test_pred,
-                'y_pred_neg': neg_test_pred,
-            })[f'hits@{K}']
-
-            results[f'Hits@{K}'] = (val_hits, test_hits, old_old_test_hits, old_new_test_hits, new_new_test_hits)
+        results[f'Hits@{K}'] = (val_hits, test_hits, old_old_test_hits, old_new_test_hits, new_new_test_hits)
 
     valid_result = torch.cat((torch.ones(pos_valid_pred.size()), torch.zeros(neg_pred.size())), dim=0)
     valid_pred = torch.cat((pos_valid_pred, neg_pred), dim=0)
@@ -206,13 +181,13 @@ def test(model, predictor, val_data, inference_data, test_edge_bundle, negative_
 
     results['AUC'] = (roc_auc_score(valid_result.cpu().numpy(),valid_pred.cpu().numpy()), roc_auc_score(test_result.cpu().numpy(),test_pred.cpu().numpy()),roc_auc_score(old_old_result.cpu().numpy(),old_old_pred.cpu().numpy()),roc_auc_score(old_new_result.cpu().numpy(),old_new_pred.cpu().numpy()),roc_auc_score(new_new_result.cpu().numpy(),new_new_pred.cpu().numpy()))
 
-    return results
+    return results, saved_h
 
 def main():
     parser = argparse.ArgumentParser(description='OGBL-DDI (GNN)')
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--log_steps', type=int, default=1)
-    parser.add_argument('--encoder', type=str, default='gcn')
+    parser.add_argument('--encoder', type=str, default='sage')
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--hidden_channels', type=int, default=256)
     parser.add_argument('--dropout', type=float, default=0.5)
@@ -221,7 +196,7 @@ def main():
     parser.add_argument('--epochs', type=int, default=20000)
     parser.add_argument('--eval_steps', type=int, default=5)
     parser.add_argument('--runs', type=int, default=5)
-    parser.add_argument('--dataset_dir', type=str, default='./data')
+    parser.add_argument('--dataset_dir', type=str, default='../data')
     parser.add_argument('--datasets', type=str, default='collab')
     parser.add_argument('--predictor', type=str, default='mlp')  ##inner/mlp
     parser.add_argument('--patience', type=int, default=100, help='number of patience steps for early stopping')
@@ -231,15 +206,19 @@ def main():
     args = parser.parse_args()
     print(args)
 
+    this_file = "../results/" + args.datasets + "_supervised_production.txt"
+    file = open(this_file, "a")
+    file.write(str(args))
+    file.write(args.encoder + " as the encoder\n")
+    file.close()
+
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    training_data, val_data, inference_data, _, test_edge_bundle, negative_samples = torch.load("data/" + args.datasets + "_inductive.pkl")
+    training_data, val_data, inference_data, _, test_edge_bundle, negative_samples = torch.load("../data/" + args.datasets + "_production.pkl")
     input_size = training_data.x.size(1)
-    if args.datasets != "collab":
-        args.metric = 'Hits@50'
-    else:
-        args.metric = 'Hits@50'
+    
+    args.metric = 'Hits@20'
 
     training_data.to(device)
     val_data.to(device)
@@ -260,24 +239,20 @@ def main():
                               args.num_layers, args.dropout).to(device)
 
     evaluator = Evaluator(name='ogbl-ddi')
-    if args.datasets != "collab":
-        loggers = {
-            'Hits@10': Logger(args.runs, args),
-            'Hits@20': Logger(args.runs, args),
-            'Hits@30': Logger(args.runs, args),
-            'Hits@50': Logger(args.runs, args),
-            'AUC': Logger(args.runs, args),
-        }
-    elif args.datasets == "collab":
-        loggers = {
-            'Hits@10': Logger(args.runs, args),
-            'Hits@50': Logger(args.runs, args),
-            'Hits@100': Logger(args.runs, args),
-            'AUC': Logger(args.runs, args),
-        }
+    loggers = {
+        'Hits@10': Logger(args.runs, args),
+        'Hits@20': Logger(args.runs, args),
+        'Hits@30': Logger(args.runs, args),
+        'Hits@50': Logger(args.runs, args),
+        'AUC': Logger(args.runs, args),
+    }
 
     val_max = 0.0
+    
     for run in range(args.runs):
+        import torch_geometric
+        torch_geometric.seed.seed_everything(run)
+
         model.reset_parameters()
         predictor.reset_parameters()
         optimizer = torch.optim.Adam(
@@ -290,13 +265,14 @@ def main():
             loss = train(model, predictor, training_data,
                          optimizer, args.batch_size, args.encoder, args.datasets)
 
-            results = test(model, predictor, val_data, inference_data, test_edge_bundle, negative_samples,
+            results, h = test(model, predictor, val_data, inference_data, test_edge_bundle, negative_samples,
                             evaluator, args.batch_size, args.encoder, args.datasets)
 
             if results[args.metric][0] > val_max:
                 val_max = results[args.metric][0]
                 if args.encoder == 'sage':
-                    torch.save({'gnn': model.state_dict(), 'predictor': predictor.state_dict()}, "saved_models/" + args.datasets + "-sage-inductive.pkl")
+                    torch.save({'features': h}, "../Saved_features/" + args.datasets + "-" + args.encoder + "_production.pkl")
+                    torch.save({'gnn': model.state_dict(), 'predictor': predictor.state_dict()}, "../saved_models/" + args.datasets + "-" + args.encoder + "_production.pkl")
             if results[args.metric][0] >= best_val:
                 best_val = results[args.metric][0]
                 cnt_wait = 0
@@ -327,10 +303,36 @@ def main():
             print(key)
             loggers[key].print_statistics(run)
 
+    file = open(this_file, "a")
+    file.write(f'All runs:\n')
     for key in loggers.keys():
         print(key)
         loggers[key].print_statistics()
 
+        file.write(f'{key}:\n')
+        best_results = []
+        for r in loggers[key].results:
+            r = 100 * torch.tensor(r)
+            val = r[r[:, 0].argmax(), 0].item()
+            test_r = r[r[:, 0].argmax(), 1].item()
+            old_old = r[r[:, 0].argmax(), 2].item()
+            old_new = r[r[:, 0].argmax(), 3].item()
+            new_new = r[r[:, 0].argmax(), 4].item()
+            best_results.append((val, test_r, old_old, old_new, new_new))
+
+        best_result = torch.tensor(best_results)
+
+        r = best_result[:, 0]
+        file.write(f'  Final val: {r.mean():.2f} ± {r.std():.2f}')
+        r = best_result[:, 1]
+        file.write(f'   Final Test: {r.mean():.2f} ± {r.std():.2f}')
+        r = best_result[:, 2]
+        file.write(f'   Final old_old: {r.mean():.2f} ± {r.std():.2f}')
+        r = best_result[:, 3]
+        file.write(f'   Final old_new: {r.mean():.2f} ± {r.std():.2f}')
+        r = best_result[:, 4]
+        file.write(f'   Final new_new: {r.mean():.2f} ± {r.std():.2f}\n')
+    file.close()
 
 if __name__ == "__main__":
     main()

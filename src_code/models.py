@@ -120,6 +120,7 @@ class SAGE(torch.nn.Module):
             conv.reset_parameters()
 
     def forward(self, x, adj_t):
+        # import ipdb; ipdb.set_trace()
         for l, conv in enumerate(self.convs[:-1]):
             x = conv(x, adj_t)
             if self.norm_type != "none":

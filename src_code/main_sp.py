@@ -44,10 +44,10 @@ def train(model, predictor, data, split_edge, optimizer, batch_size, encoder_nam
 
         edge = pos_train_edge[perm].t()
 
-        if dataset != "collab" and dataset != "ppa":
+        if dataset != "collab":
             neg_edge = negative_sampling(edge_index, num_nodes=data.x.size(0),
                                  num_neg_samples=perm.size(0), method='dense')
-        elif dataset == "collab" or dataset == "ppa":
+        elif dataset == "collab":
             neg_edge = torch.randint(0, data.x.size()[0], edge.size(), dtype=torch.long,
                              device=h.device)
 
@@ -81,27 +81,10 @@ def test(model, predictor, data, split_edge, evaluator, batch_size, encoder_name
     else:
         h = model(data.x, data.adj_t)
 
-    pos_train_edge = split_edge['train']['edge'].to(h.device)
-    if dataset != "collab" and dataset != "ppa":
-        neg_train_edge = split_edge['train']['edge_neg'].to(h.device)
-    elif dataset == "collab" or dataset == "ppa":
-        neg_train_edge = split_edge['valid']['edge_neg'].to(h.device)
     pos_valid_edge = split_edge['valid']['edge'].to(h.device)
     neg_valid_edge = split_edge['valid']['edge_neg'].to(h.device)
     pos_test_edge = split_edge['test']['edge'].to(h.device)
     neg_test_edge = split_edge['test']['edge_neg'].to(h.device)
-
-    pos_train_preds = []
-    for perm in DataLoader(range(pos_train_edge.size(0)), batch_size):
-        edge = pos_train_edge[perm].t()
-        pos_train_preds += [predictor(h[edge[0]], h[edge[1]]).squeeze().cpu()]
-    pos_train_pred = torch.cat(pos_train_preds, dim=0)
-
-    neg_train_preds = []
-    for perm in DataLoader(range(neg_train_edge.size(0)), batch_size):
-        edge = neg_train_edge[perm].t()
-        neg_train_preds += [predictor(h[edge[0]], h[edge[1]]).squeeze().cpu()]
-    neg_train_pred = torch.cat(neg_train_preds, dim=0)
 
     pos_valid_preds = []
     for perm in DataLoader(range(pos_valid_edge.size(0)), batch_size):
@@ -114,11 +97,6 @@ def test(model, predictor, data, split_edge, evaluator, batch_size, encoder_name
         edge = neg_valid_edge[perm].t()
         neg_valid_preds += [predictor(h[edge[0]], h[edge[1]]).squeeze().cpu()]
     neg_valid_pred = torch.cat(neg_valid_preds, dim=0)
-
-    # if encoder_name == 'mlp':
-    #     h = model(data.x)
-    # else:
-    #     h = model(data.x, data.full_adj_t)
 
     pos_test_preds = []
     for perm in DataLoader(range(pos_test_edge.size(0)), batch_size):
@@ -133,13 +111,10 @@ def test(model, predictor, data, split_edge, evaluator, batch_size, encoder_name
     neg_test_pred = torch.cat(neg_test_preds, dim=0)
 
     results = {}
-    if dataset != "collab" and dataset != "ppa":
+    if dataset != "collab":
         for K in [10, 20, 30, 50]:
             evaluator.K = K
-            train_hits = evaluator.eval({
-                'y_pred_pos': pos_train_pred,
-                'y_pred_neg': neg_train_pred,
-            })[f'hits@{K}']
+ 
             valid_hits = evaluator.eval({
                 'y_pred_pos': pos_valid_pred,
                 'y_pred_neg': neg_valid_pred,
@@ -149,14 +124,11 @@ def test(model, predictor, data, split_edge, evaluator, batch_size, encoder_name
                 'y_pred_neg': neg_test_pred,
             })[f'hits@{K}']
 
-            results[f'Hits@{K}'] = (train_hits, valid_hits, test_hits)
-    elif dataset == "collab" or dataset == "ppa":
+            results[f'Hits@{K}'] = (valid_hits, test_hits)
+    elif dataset == "collab":
         for K in [10, 50, 100]:
             evaluator.K = K
-            train_hits = evaluator.eval({
-                'y_pred_pos': pos_train_pred,
-                'y_pred_neg': neg_train_pred,
-            })[f'hits@{K}']
+ 
             valid_hits = evaluator.eval({
                 'y_pred_pos': pos_valid_pred,
                 'y_pred_neg': neg_valid_pred,
@@ -166,10 +138,7 @@ def test(model, predictor, data, split_edge, evaluator, batch_size, encoder_name
                 'y_pred_neg': neg_test_pred,
             })[f'hits@{K}']
 
-            results[f'Hits@{K}'] = (train_hits, valid_hits, test_hits)
-
-    train_result = torch.cat((torch.ones(pos_train_pred.size()), torch.zeros(neg_train_pred.size())), dim=0)
-    train_pred = torch.cat((pos_train_pred, neg_train_pred), dim=0)
+            results[f'Hits@{K}'] = (valid_hits, test_hits)
 
     valid_result = torch.cat((torch.ones(pos_valid_pred.size()), torch.zeros(neg_valid_pred.size())), dim=0)
     valid_pred = torch.cat((pos_valid_pred, neg_valid_pred), dim=0)
@@ -177,9 +146,9 @@ def test(model, predictor, data, split_edge, evaluator, batch_size, encoder_name
     test_result = torch.cat((torch.ones(pos_test_pred.size()), torch.zeros(neg_test_pred.size())), dim=0)
     test_pred = torch.cat((pos_test_pred, neg_test_pred), dim=0)
 
-    results['AUC'] = (roc_auc_score(train_result.cpu().numpy(),train_pred.cpu().numpy()), roc_auc_score(valid_result.cpu().numpy(),valid_pred.cpu().numpy()),roc_auc_score(test_result.cpu().numpy(),test_pred.cpu().numpy()))
+    results['AUC'] = (roc_auc_score(valid_result.cpu().numpy(),valid_pred.cpu().numpy()),roc_auc_score(test_result.cpu().numpy(),test_pred.cpu().numpy()))
 
-    return results
+    return results, h
 
 def main():
     parser = argparse.ArgumentParser(description='OGBL-DDI (GNN)')
@@ -194,8 +163,8 @@ def main():
     parser.add_argument('--epochs', type=int, default=20000)
     parser.add_argument('--eval_steps', type=int, default=5)
     parser.add_argument('--runs', type=int, default=5)
-    parser.add_argument('--dataset_dir', type=str, default='./data')
-    parser.add_argument('--datasets', type=str, default='collab')
+    parser.add_argument('--dataset_dir', type=str, default='../data')
+    parser.add_argument('--datasets', type=str, default='cora')
     parser.add_argument('--predictor', type=str, default='mlp')  ##inner/mlp
     parser.add_argument('--patience', type=int, default=100, help='number of patience steps for early stopping')
     parser.add_argument('--metric', type=str, default='Hits@20', choices=['auc', 'hits@20', 'hits@50'], help='main evaluation metric')
@@ -204,26 +173,31 @@ def main():
     args = parser.parse_args()
     print(args)
 
+    this_file = "../results/" + args.datasets + "_supervised_transductive_search.txt"
+    file = open(this_file, "a")
+    file.write(str(args))
+    file.write(args.encoder + " as the encoder\n")
+    file.close()
+
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    # if args.datasets == "cora" or args.datasets == "citeseer" or args.datasets == "pubmed":
-    if args.datasets != "collab" and args.datasets != "ppa":
+    if args.datasets != "collab":
         dataset = get_dataset(args.dataset_dir, args.datasets)
         data = dataset[0]
 
-        if exists("data/" + args.datasets + ".pkl"):
-            split_edge = torch.load("data/" + args.datasets + ".pkl")
+        if exists("../data/" + args.datasets + ".pkl"):
+            split_edge = torch.load("../data/" + args.datasets + ".pkl")
         else:
             split_edge = do_edge_split(dataset)
-            torch.save(split_edge, "data/" + args.datasets + ".pkl")
+            torch.save(split_edge, "../data/" + args.datasets + ".pkl")
         
         edge_index = split_edge['train']['edge'].t()
         data.adj_t = edge_index
         input_size = data.x.size()[1]
-        args.metric = 'Hits@50'
+        args.metric = 'Hits@20'
 
-    elif args.datasets == "collab" or args.datasets == "ppa":
+    elif args.datasets == "collab":
         dataset = PygLinkPropPredDataset(name=('ogbl-' + args.datasets))
         data = dataset[0]
         edge_index = data.edge_index
@@ -234,10 +208,7 @@ def main():
         args.metric = 'Hits@50'
 
         data.adj_t = edge_index
-        ##add training edges into message passing
-        # data.adj_t = torch.cat((edge_index, split_edge['train']['edge'].t()), dim=1)
-        # split_edge['train']['edge'] = data.adj_t.t()
-
+    
     if args.use_valedges_as_input:
         val_edge_index = split_edge['valid']['edge'].t()
         full_edge_index = torch.cat([edge_index, val_edge_index], dim=-1)
@@ -292,6 +263,9 @@ def main():
 
     val_max = 0.0
     for run in range(args.runs):
+        import torch_geometric
+        torch_geometric.seed.seed_everything(run)
+        
         model.reset_parameters()
         predictor.reset_parameters()
         optimizer = torch.optim.Adam(
@@ -304,15 +278,16 @@ def main():
             loss = train(model, predictor, data, split_edge,
                          optimizer, args.batch_size, args.encoder, args.datasets)
 
-            results = test(model, predictor, data, split_edge,
+            results, h = test(model, predictor, data, split_edge,
                             evaluator, args.batch_size, args.encoder, args.datasets)
 
-            if results['Hits@50'][1] > val_max:
-                val_max = results['Hits@50'][1]
+            if results['Hits@50'][0] > val_max:
+                val_max = results['Hits@50'][0]
                 if args.encoder == 'sage':
-                    torch.save({'gnn': model.state_dict(), 'predictor': predictor.state_dict()}, "saved_models/" + args.datasets + "-sage.pkl")
-            if results['Hits@50'][1] >= best_val:
-                best_val = results['Hits@50'][1]
+                    torch.save({'features': h}, "../Saved_features/" + args.datasets + "-" + args.encoder + "_transductive.pkl")
+                    torch.save({'gnn': model.state_dict(), 'predictor': predictor.state_dict()}, "../saved_models/" + args.datasets + "-" + args.encoder + "_transductive.pkl")
+            if results['Hits@50'][0] >= best_val:
+                best_val = results['Hits@50'][0]
                 cnt_wait = 0
             else:
                 cnt_wait +=1
@@ -322,12 +297,11 @@ def main():
 
             if epoch % args.log_steps == 0:
                 for key, result in results.items():
-                    train_hits, valid_hits, test_hits = result
+                    valid_hits, test_hits = result
                     print(key)
                     print(f'Run: {run + 1:02d}, '
                             f'Epoch: {epoch:02d}, '
                             f'Loss: {loss:.4f}, '
-                            f'Train: {100 * train_hits:.2f}%, '
                             f'Valid: {100 * valid_hits:.2f}%, '
                             f'Test: {100 * test_hits:.2f}%')
                 print('---')
@@ -338,10 +312,25 @@ def main():
         for key in loggers.keys():
             print(key)
             loggers[key].print_statistics(run)
-
+    file = open(this_file, "a")
+    file.write(f'All runs:\n')
     for key in loggers.keys():
         print(key)
         loggers[key].print_statistics()
+        
+        file.write(f'{key}:\n')
+        best_results = []
+        for r in loggers[key].results:
+            r = 100 * torch.tensor(r)
+            valid = r[:, 0].max().item()
+            test1 = r[r[:, 0].argmax(), 1].item()
+            best_results.append((valid, test1))
+
+        best_result = torch.tensor(best_results)
+
+        r = best_result[:, 1]
+        file.write(f'Test: {r.mean():.4f} ± {r.std():.4f}\n')
+    file.close()
 
 
 if __name__ == "__main__":

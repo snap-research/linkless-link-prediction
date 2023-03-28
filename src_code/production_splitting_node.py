@@ -197,23 +197,22 @@ def do_edge_split(dataset, fast_split=False, val_ratio=0.05, test_ratio=0.1, spl
     split_edge['test']['edge_neg'] = data.test_neg_edge_index.t()
     return split_edge
 
-
 if __name__ == "__main__":
     from utils import get_dataset
 
     ## the dataset for splitting
-    dataset = "cora"
+    dataset = "citeseer"
     ## testing edges ratio (0.3 for cora and citeseer, 0.1 for other datasets)
-    test_ratio=0.3 
+    test_ratio=0.3
     ## New nodes ratio (0.3 for cora and citeseer, 0.1 for other datasets)
-    val_node_ratio=0.3 
-    ## validation/training splitting ratio (0.3 for all the datasets)
+    val_node_ratio=0.3
+    ## validation/training splitting ratio (0.3 for cora and citeseer, 0.1 for other datasets)
     val_ratio=0.3 
-    ## Splitting ratio for new old-old edges appearing for the inference(0.3 for cora and citeseer, 0.1 for other datasets)
+    ## Splitting ratio for new old-old edges appearing for the inference(0.1 for all datasets)
     old_old_extra_ratio= 0.1 
     
-    dset = get_dataset('./data', dataset)
+    dset = get_dataset('../data', dataset)
     all_data = do_inductive_edge_split(dset, dataset, test_ratio, val_node_ratio, val_ratio, old_old_extra_ratio)
 
-    torch.save(all_data, "data/" + dataset + "_inductive.pkl")
+    torch.save(all_data, "../data/" + dataset + "_production.pkl")
     
