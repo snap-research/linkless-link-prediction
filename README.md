@@ -24,7 +24,7 @@ python production_splitting_node.py
 ### Transductive Setting 
 - **Teacher GNN training.** You can change "sage" to "mlp" to obtain supervised training results with MLP. 
 ```
-python main_sp.py --datasets=cora --encoder=sage 
+python main_sp.py --datasets=cora --encoder=sage --tranductive=tranductive
 ```
 To reproduce the supervised results shown in Table 2, you can just simply run the following command. The results will be shown in /results.
 ```
@@ -33,7 +33,7 @@ bash supervised_transductive.sh
 ```
 - **Student MLP training.** KD_kl and KD_r indicate the weights for the distribution-based and rank-based matching KD, respectively.
 ```
-python main.py --datasets=cora --KD_kl=1 --KD_r=1 --True_label=1
+python main.py --datasets=cora --KD_kl=1 --KD_r=1 --True_label=1 --tranductive=tranductive
 ```
 To reproduce the results shown in Table 2, please run the following command:
 ```
@@ -48,7 +48,7 @@ python production_splitting_node.py
 ```
 - **Teacher GNN training.** We can change "sage" to "mlp" to obtain the supervised training results with MLP.
 ```
-python main_sp_production.py --datasets=cora --encoder=sage 
+python main_sp_production.py --datasets=cora --encoder=sage --tranductive=production
 ```
 To reproduce the supervised results shown in Table 3, you can just simply run the following command. The results will be shown in /results.
 ```
@@ -57,7 +57,7 @@ bash supervised_production.sh
 ```
 - **Student MLP training.** KD_kl and KD_r indicate the weights for the distribution-based and rank-based matching KD, respectively.
 ```
-python main_production.py --datasets=cora --KD_kl=1 --KD_r=1 --True_label=1
+python main_production.py --datasets=cora --KD_kl=1 --KD_r=1 --True_label=1 --tranductive=production
 ```
 To reproduce the results shown in Table 3, please run the following command:
 ```
