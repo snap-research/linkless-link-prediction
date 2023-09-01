@@ -15,9 +15,10 @@ from ogb.linkproppred import PygLinkPropPredDataset, Evaluator
 from logger import Logger, Logger_production
 
 from utils import get_dataset, do_edge_split
-from torch.nn import BCELoss
 
 from models import MLP, GCN, SAGE, LinkPredictor
+from sageconv_updated import SAGEConv_update
+from torch_geometric.nn import SAGEConv
 from torch_sparse import SparseTensor
 from sklearn.metrics import *
 from os.path import exists
@@ -35,7 +36,7 @@ def train(model, predictor, data, split_edge, optimizer, batch_size, encoder_nam
     model.train()
     predictor.train()
 
-    criterion = BCELoss()
+    bce_loss = nn.BCELoss()
 
 
     total_loss = total_examples = 0
@@ -63,7 +64,7 @@ def train(model, predictor, data, split_edge, optimizer, batch_size, encoder_nam
         train_edges = torch.cat((edge, neg_edge), dim=-1)
         train_label = torch.cat((torch.ones(edge.size()[1]), torch.zeros(neg_edge.size()[1])), dim=0).to(h.device)
         out = predictor(h[train_edges[0]], h[train_edges[1]]).squeeze()
-        loss = criterion(out, train_label)
+        loss = bce_loss(out, train_label)
 
         loss.backward()
 
@@ -287,7 +288,7 @@ def main():
     parser.add_argument('--runs', type=int, default=5)
     parser.add_argument('--dataset_dir', type=str, default='../data')
     parser.add_argument('--datasets', type=str, default='cora')
-    parser.add_argument('--predictor', type=str, default='mlp')  ##inner/mlp
+    parser.add_argument('--predictor', type=str, default='mlp', choices=['inner','mlp'])
     parser.add_argument('--patience', type=int, default=100, help='number of patience steps for early stopping')
     parser.add_argument('--metric', type=str, default='Hits@20', choices=['auc', 'hits@20', 'hits@50'], help='main evaluation metric')
     parser.add_argument('--use_valedges_as_input', action='store_true')
@@ -298,8 +299,8 @@ def main():
     args = parser.parse_args()
     print(args)
 
-    this_file = "../results/" + args.datasets + "_supervised_" + args.transductive + ".txt"
-    file = open(this_file, "a")
+    Logger_file = "../results/" + args.datasets + "_supervised_" + args.transductive + ".txt"
+    file = open(Logger_file, "a")
     file.write(str(args))
     file.write(args.encoder + " as the encoder\n")
     file.close()
@@ -307,7 +308,7 @@ def main():
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
 
-    if args.trasductive == "transductive": 
+    if args.transductive == "transductive": 
         if args.datasets != "collab":
             dataset = get_dataset(args.dataset_dir, args.datasets)
             data = dataset[0]
@@ -359,9 +360,14 @@ def main():
         inference_data.to(device)
 
     if args.encoder == 'sage':
-        model = SAGE(args.datasets, input_size, args.hidden_channels,
-                     args.hidden_channels, args.num_layers,
-                     args.dropout).to(device)
+        if args.datasets == "coauthor-physics":
+            model = SAGE(args.datasets, input_size, args.hidden_channels,
+                        args.hidden_channels, args.num_layers,
+                        args.dropout, SAGEConv_update).to(device)
+        else:
+            model = SAGE(args.datasets, input_size, args.hidden_channels,
+                        args.hidden_channels, args.num_layers,
+                        args.dropout, SAGEConv).to(device)
     elif args.encoder == 'gcn':
         model = GCN(input_size, args.hidden_channels,
                     args.hidden_channels, args.num_layers,
@@ -391,11 +397,11 @@ def main():
             }
     else:
         loggers = {
-            'Hits@10': Logger_production(args.runs, args),
-            'Hits@20': Logger_production(args.runs, args),
-            'Hits@30': Logger_production(args.runs, args),
-            'Hits@50': Logger_production(args.runs, args),
-            'AUC': Logger_production(args.runs, args),
+            'Hits@10': ProductionLogger(args.runs, args),
+            'Hits@20': ProductionLogger(args.runs, args),
+            'Hits@30': ProductionLogger(args.runs, args),
+            'Hits@50': ProductionLogger(args.runs, args),
+            'AUC': ProductionLogger(args.runs, args),
         }
 
     val_max = 0.0
@@ -411,15 +417,15 @@ def main():
         cnt_wait = 0
         best_val = 0.0
         for epoch in range(1, 1 + args.epochs):
-            if args.trasductive == "trasductive":
+            if args.transductive == "transductive":
                 loss = train(model, predictor, data, split_edge,
-                            optimizer, args.batch_size, args.encoder, args.datasets, args.trasductive)
+                            optimizer, args.batch_size, args.encoder, args.datasets, args.transductive)
                 
                 results, h = test_transductive(model, predictor, data, split_edge,
                             evaluator, args.batch_size, args.encoder, args.datasets)
             else:
                 loss = train(model, predictor, training_data, None,
-                         optimizer, args.batch_size, args.encoder, args.datasets, args.trasductive)
+                         optimizer, args.batch_size, args.encoder, args.datasets, args.transductive)
                 
                 results, h = test_production(model, predictor, val_data, inference_data, test_edge_bundle, negative_samples,
                             evaluator, args.batch_size, args.encoder, args.datasets)
@@ -469,13 +475,13 @@ def main():
             print(key)
             loggers[key].print_statistics(run)
 
-    file = open(this_file, "a")
+    file = open(Logger_file, "a")
     file.write(f'All runs:\n')
     for key in loggers.keys():
         print(key)
         loggers[key].print_statistics()
         
-        if args.tranductive:
+        if args.transductive:
             file.write(f'{key}:\n')
             best_results = []
             for r in loggers[key].results:
@@ -515,5 +521,4 @@ def main():
     file.close()
 
 
-if __name__ == "__main__":
-    main()
+main()

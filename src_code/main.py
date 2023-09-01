@@ -1,5 +1,5 @@
 import argparse
-
+import itertools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,12 +11,11 @@ import torch_geometric.transforms as T
 
 from ogb.linkproppred import PygLinkPropPredDataset, Evaluator
 
-from logger import Logger, Logger_production
+from logger import Logger, ProductionLogger
 
 from utils import get_dataset, do_edge_split
-from torch.nn import BCELoss
 
-from models import MLP, GCN, SAGE, LinkPredictor, Teacher_LinkPredictor
+from models import MLP, GCN, SAGE, LinkPredictor
 from torch_sparse import SparseTensor
 from sklearn.metrics import *
 from os.path import exists
@@ -24,14 +23,13 @@ from torch_cluster import random_walk
 from torch.nn.functional import cosine_similarity
 import torch_geometric
 
-
 import time
 import random
 
-def KD_cosine(s, t):
+def cosine_loss(s, t):
     return 1-cosine_similarity(s, t.detach(), dim=-1).mean()
 
-def KD_rank(s,t,T):
+def KL_loss(s,t,T):
     y_s = F.log_softmax(s/T, dim=-1)
     y_t = F.softmax(t/T, dim=-1)
     loss = F.kl_div(y_s,y_t,size_average=False) * (T**2) / y_s.size()[0]
@@ -70,8 +68,8 @@ def train(model, predictor, t_h, teacher_predictor, data, split_edge,
     model.train()
     predictor.train()
 
-    mse_loss = torch.nn.MSELoss()
-    criterion = BCELoss()
+    mse_loss = nn.MSELoss()
+    bce_loss = nn.BCELoss()
     margin_rank_loss = nn.MarginRankingLoss(margin=args.margin)
 
     total_loss = total_examples = 0
@@ -100,23 +98,22 @@ def train(model, predictor, t_h, teacher_predictor, data, split_edge,
             t_emb = torch.reshape(t_h[samples[:,0]], (samples[:,0].size(0), 1, h.size(1))).repeat(1,sample_step*args.hops*(1+args.ns_rate),1)
             s_r = predictor(batch_emb, h[samples[:, 1:]])
             t_r = teacher_predictor(t_emb, t_h[samples[:, 1:]])
-            kd_rank_loss = KD_rank(torch.reshape(s_r, (s_r.size()[0], s_r.size()[1])), torch.reshape(t_r, (t_r.size()[0], t_r.size()[1])), 1)
+            kd_distribution_loss = KL_loss(torch.reshape(s_r, (s_r.size()[0], s_r.size()[1])), torch.reshape(t_r, (t_r.size()[0], t_r.size()[1])), 1)
 
             #### calculate the rank based matching loss
             rank_loss = torch.tensor(0.0).to("cuda")
-            import itertools
-            this_list = [l_i for l_i in range(sample_step*args.hops*(1+args.ns_rate))]
-            dim_pairs = [x for x in itertools.combinations(this_list, r=2)]
+            sampled_nodes = [l_i for l_i in range(sample_step*args.hops*(1+args.ns_rate))]
+            dim_pairs = [x for x in itertools.combinations(sampled_nodes, r=2)]
             dim_pairs = np.array(dim_pairs).T
-            teacher_rl = torch.zeros((len(t_r), dim_pairs.shape[1],1)).to(t_r.device)
+            teacher_rank_list = torch.zeros((len(t_r), dim_pairs.shape[1],1)).to(t_r.device)
                       
             mask = t_r[:, dim_pairs[0]] > (t_r[:, dim_pairs[1]] + args.margin)
-            teacher_rl[mask] = 1
+            teacher_rank_list[mask] = 1
             mask2 = t_r[:, dim_pairs[0]] < (t_r[:, dim_pairs[1]] - args.margin)
-            teacher_rl[mask2] = -1
-            first_rl = s_r[:, dim_pairs[0]].squeeze()
-            second_rl = s_r[:, dim_pairs[1]].squeeze()
-            rank_loss = margin_rank_loss(first_rl, second_rl, teacher_rl.squeeze())
+            teacher_rank_list[mask2] = -1
+            first_rank_list = s_r[:, dim_pairs[0]].squeeze()
+            second_rank_list = s_r[:, dim_pairs[1]].squeeze()
+            kd_rank_loss = margin_rank_loss(first_rank_list, second_rank_list, teacher_rank_list.squeeze())
 
         if args.datasets != "collab":
             neg_edge = negative_sampling(edge_index, num_nodes=data.x.size(0),
@@ -124,18 +121,18 @@ def train(model, predictor, t_h, teacher_predictor, data, split_edge,
         elif args.datasets == "collab":
             neg_edge = torch.randint(0, data.x.size()[0], [edge.size(0), edge.size(1)], dtype=torch.long, device=h.device)
 
-        ### clculate the true_label loss
+        ### calculate the true_label loss
         train_edges = torch.cat((edge, neg_edge), dim=-1)
         train_label = torch.cat((torch.ones(edge.size()[1]), torch.zeros(neg_edge.size()[1])), dim=0).to(h.device)
         out = predictor(h[train_edges[0]], h[train_edges[1]]).squeeze()
-        label_loss = criterion(out, train_label)
+        label_loss = bce_loss(out, train_label)
        
         t_out = teacher_predictor(t_h[train_edges[0]], t_h[train_edges[1]]).squeeze().detach()
 
         if args.KD_kl or args.KD_r:
-            loss = args.True_label * label_loss + args.KD_f * KD_cosine(h[node_perm], t_h[node_perm]) + args.KD_p * mse_loss(out, t_out) + args.KD_kl * kd_rank_loss + args.KD_r * rank_loss
+            loss = args.True_label * label_loss + args.KD_f * cosine_loss(h[node_perm], t_h[node_perm]) + args.KD_p * mse_loss(out, t_out) + args.KD_kl * kd_distribution_loss + args.KD_r * kd_rank_loss
         else:
-            loss = args.True_label * label_loss + args.KD_f * KD_cosine(h[node_perm], t_h[node_perm]) + args.KD_p * mse_loss(out, t_out)
+            loss = args.True_label * label_loss + args.KD_f * cosine_loss(h[node_perm], t_h[node_perm]) + args.KD_p * mse_loss(out, t_out)
 
         loss.backward()
 
@@ -347,28 +344,28 @@ def main():
     parser.add_argument('--runs', type=int, default=10)
     parser.add_argument('--dataset_dir', type=str, default='../data')
     parser.add_argument('--datasets', type=str, default='collab')
-    parser.add_argument('--predictor', type=str, default='mlp')  ##inner/mlp
+    parser.add_argument('--predictor', type=str, default='mlp', choices=['inner','mlp'])
     parser.add_argument('--patience', type=int, default=100, help='number of patience steps for early stopping')
     parser.add_argument('--metric', type=str, default='Hits@20', choices=['auc', 'hits@20', 'hits@50'], help='main evaluation metric')
     parser.add_argument('--use_valedges_as_input', action='store_true')
-    parser.add_argument('--True_label', default=0.1, type=float) #true_label loss
-    parser.add_argument('--KD_f', default=0, type=float) #Representation-based matching KD
-    parser.add_argument('--KD_p', default=0, type=float) #logit-based matching KD
-    parser.add_argument('--KD_kl', default=1, type=float) #distribution-based matching kd
-    parser.add_argument('--KD_r', default=1, type=float) #rank-based matching kd
-    parser.add_argument('--margin', default=0.1, type=float) #margin for rank-based kd
-    parser.add_argument('--rw_step', type=int, default=3) # nearby nodes sampled times
-    parser.add_argument('--ns_rate', type=int, default=1) # # randomly sampled rate over # nearby nodes
-    parser.add_argument('--hops', type=int, default=2) # random_walk step for each sampling time
-    parser.add_argument('--ps_method', type=str, default='nb') # positive sampling is rw or nb
+    parser.add_argument('--True_label', default=0.1, type=float, help="true_label loss")
+    parser.add_argument('--KD_f', default=0, type=float, help="Representation-based matching KD") 
+    parser.add_argument('--KD_p', default=0, type=float, help="logit-based matching KD") 
+    parser.add_argument('--KD_kl', default=1, type=float, help="distribution-based matching kd")
+    parser.add_argument('--KD_r', default=1, type=float, help="rank-based matching kd") 
+    parser.add_argument('--margin', default=0.1, type=float, help="margin for rank-based kd") 
+    parser.add_argument('--rw_step', type=int, default=3, help="nearby nodes sampled times")
+    parser.add_argument('--ns_rate', type=int, default=1, help="randomly sampled rate over # nearby nodes") 
+    parser.add_argument('--hops', type=int, default=2, help="random_walk step for each sampling time")
+    parser.add_argument('--ps_method', type=str, default='nb', help="positive sampling is rw or nb")
     parser.add_argument('--transductive', type=str, default='transductive', choices=['transductive', 'production'])
     parser.add_argument('--minibatch', action='store_true')
 
     args = parser.parse_args()
     print(args)
 
-    this_file = "../results/" + args.datasets + "_KD_" + args.transductive + ".txt"
-    file = open(this_file, "a")
+    Logger_file = "../results/" + args.datasets + "_KD_" + args.transductive + ".txt"
+    file = open(Logger_file, "a")
     file.write(str(args)+"\n")
     if args.KD_f != 0:
         file.write("Logit-matching\n")
@@ -457,7 +454,7 @@ def main():
 
     # teacher_model.load_state_dict(pretrained_model['gnn'], strict=True)
     # teacher_model.to(device)
-    teacher_predictor = Teacher_LinkPredictor(args.predictor, 256, 256, 1, 2, args.dropout)
+    teacher_predictor = LinkPredictor(args.predictor, 256, 256, 1, 2, args.dropout)
     teacher_predictor.load_state_dict(pretrained_model['predictor'], strict=True)
     teacher_predictor.to(device)
 
@@ -489,11 +486,11 @@ def main():
             }
     else:
         loggers = {
-            'Hits@10': Logger_production(args.runs, args),
-            'Hits@20': Logger_production(args.runs, args),
-            'Hits@30': Logger_production(args.runs, args),
-            'Hits@50': Logger_production(args.runs, args),
-            'AUC': Logger_production(args.runs, args),
+            'Hits@10': ProductionLogger(args.runs, args),
+            'Hits@20': ProductionLogger(args.runs, args),
+            'Hits@30': ProductionLogger(args.runs, args),
+            'Hits@50': ProductionLogger(args.runs, args),
+            'AUC': ProductionLogger(args.runs, args),
         }
 
     for run in range(args.runs):
@@ -508,7 +505,7 @@ def main():
         cnt_wait = 0
         best_val = 0.0
         for epoch in range(1, 1 + args.epochs):
-            if args.tranductive:
+            if args.transductive:
                 loss = train(model, predictor, t_h, teacher_predictor, data, split_edge,
                             optimizer, args, device)
                 
@@ -562,7 +559,7 @@ def main():
             print(key)
             loggers[key].print_statistics(run)
 
-    file = open(this_file, "a")
+    file = open(Logger_file, "a")
     file.write(f'All runs:\n')
 
     if args.transductive:
@@ -612,5 +609,4 @@ def main():
             file.write(f'   Final new_new: {r.mean():.2f} ± {r.std():.2f}\n')
     file.close()
 
-if __name__ == "__main__":
-    main()
+main()

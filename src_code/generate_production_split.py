@@ -17,16 +17,6 @@ def add_node_feats(data, device, type='degree'):
     data.x = one_hot(degrees).to(device).float()
     return data
 
-
-def set_random_seeds(random_seed=0):
-    r"""Sets the seed for generating random numbers."""
-    torch.manual_seed(random_seed)
-    torch.cuda.manual_seed(random_seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    np.random.seed(random_seed)
-    random.seed(random_seed)
-
 def perform_subset_negative_sampling(node_mask, pos_index):
     device = node_mask.device
     n_selected = node_mask.sum().item()
@@ -88,7 +78,7 @@ def split_edges(edge_index, val_ratio, test_ratio):
 
     return train_edge_index, val_edge_index, test_edge_index
 
-def do_inductive_edge_split(dataset: Dataset, data_name, test_ratio, val_node_ratio, val_ratio, old_old_extra_ratio, split_seed=234):
+def do_production_edge_split(dataset: Dataset, data_name, test_ratio, val_node_ratio, val_ratio, old_old_extra_ratio, split_seed=234):
     # Seed our RNG
     random.seed(split_seed)
     torch.manual_seed(split_seed) 
@@ -212,7 +202,7 @@ if __name__ == "__main__":
     old_old_extra_ratio= 0.1 
     
     dset = get_dataset('../data', dataset)
-    all_data = do_inductive_edge_split(dset, dataset, test_ratio, val_node_ratio, val_ratio, old_old_extra_ratio)
+    all_data = do_production_edge_split(dset, dataset, test_ratio, val_node_ratio, val_ratio, old_old_extra_ratio)
 
     torch.save(all_data, "../data/" + dataset + "_production.pkl")
     

@@ -2,6 +2,9 @@ import torch
 
 
 class Logger(object):
+    """
+    Logger for the transductive setting, where we record the overall result only.
+    """
     def __init__(self, runs, info=None):
         self.info = info
         self.results = [[] for _ in range(runs)]
@@ -38,24 +41,10 @@ class Logger(object):
             r = best_result[:, 1]
             print(f'   Final Test: {r.mean():.2f} ± {r.std():.2f}')
 
-            # result = torch.tensor(self.results)
-
-            # best_results = []
-            # for r in result:
-            #     valid = r[:, 0].max().item()
-            #     test = r[r[:, 0].argmax(), 1].item()
-            #     best_results.append((valid, test))
-
-            # best_result = torch.tensor(best_results)
-            # print(best_result)
-
-            # print(f'All runs:')
-            # r = best_result[:, 0]
-            # print(f'Highest Valid: {r.mean():.4f} ± {r.std():.4f}')
-            # r = best_result[:, 1]
-            # print(f'   Final Test: {r.mean():.4f} ± {r.std():.4f}')
-
-class Logger_production(object):
+class ProductionLogger(object):
+    """
+    Logger for the production setting, where we record old_old, old_new, new_new and overall results separately.
+    """
     def __init__(self, runs, info=None):
         self.info = info
         self.results = [[] for _ in range(runs)]

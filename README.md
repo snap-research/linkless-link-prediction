@@ -14,19 +14,13 @@ This repository contains the source code for the paper: [Linkless Link Predictio
 - python==3.9.13
 ```
 
-<!-- ## Preprocess the dataset for the production setting
-- Change the dataset name ("dataset") in Line 205 in production_splitting_node.py file. 
-```
-python production_splitting_node.py
-``` -->
-
 ## Usage
 ### Transductive Setting 
 - **Teacher GNN training.** You can change "sage" to "mlp" to obtain supervised training results with MLP. 
 ```
 python main_sp.py --datasets=cora --encoder=sage --tranductive=tranductive
 ```
-To reproduce the supervised results shown in Table 2, you can just simply run the following command. The results will be shown in /results.
+To reproduce the supervised results shown in Table 2, you can just simply run the following command. The results will be shown in results/.
 ```
 cd scripts/
 bash supervised_transductive.sh
@@ -42,15 +36,15 @@ bash KD_transductive.sh
 ```
 ### Production Setting
 - **Pre-process dataset**
-In this work, we design a new production setting to resemble the real-world link prediction scenario. For more details, please refer to our paper. Our split datasets are already saved in ../data folder. If you want to apply this setting on our own datasets or split the datsets by your self, please change the dataset name ("dataset") in Line 205 in production_splitting_node.py file and run the following command:
+In this work, we design a new production setting to resemble the real-world link prediction scenario. For more details, please refer to our paper. Our split datasets are already saved in ../data folder. If you want to apply this setting on our own datasets or split the datsets by your self, please change the dataset name ("dataset") in Line 205 in generate_production_split.py file and run the following command:
 ```
-python production_splitting_node.py
+python generate_production_split.py
 ```
-- **Teacher GNN training.** We can change "sage" to "mlp" to obtain the supervised training results with MLP.
+- **Teacher GNN training.** Note: changing "sage" to "mlp" can reproduce the supervised training results with MLP.
 ```
 python main_sp_production.py --datasets=cora --encoder=sage --tranductive=production
 ```
-To reproduce the supervised results shown in Table 3, you can just simply run the following command. The results will be shown in /results.
+To reproduce the supervised results shown in Table 3, you can just simply run the following command. The results will be shown in results/.
 ```
 cd scripts/
 bash supervised_production.sh
@@ -65,17 +59,14 @@ cd scripts/
 bash KD_production.sh
 ```
 ## Reference
-```
-@article{guo2022linkless,
-  title={Linkless Link Prediction via Relational Distillation},
-  author={Guo, Zhichun and Shiao, William and Zhang, Shichang and Liu, Yozen and Chawla, Nitesh and Shah, Neil and Zhao, Tong},
-  journal={arXiv preprint arXiv:2210.05801},
-  year={2022}
+If you find our work useful, please cite the following:
+```bibtex
+@inproceedings{guo2023linkless,
+  title={Linkless link prediction via relational distillation},
+  author={Guo, Zhichun and Shiao, William and Zhang, Shichang and Liu, Yozen and Chawla, Nitesh V and Shah, Neil and Zhao, Tong},
+  booktitle={International Conference on Machine Learning},
+  pages={12012--12033},
+  year={2023},
+  organization={PMLR}
 }
 ```
-
-<!-- ## Acknowledgements -->
-
-
-<!-- by Zhichun Guo(zguo5@nd.edu), William Shiao(wshiao@snap.com), Shichang Zhang(shichang@cs.ucla.edu), Yozen Liu(yliu2@snapchat.com), Nitesh Chawla(nchawla@nd.edu), Neil Shah(nshah@snap.com), Tong Zhao(tzhao@snapchat.com).
- -->

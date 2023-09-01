@@ -7,10 +7,12 @@ from torch_sparse import SparseTensor, matmul
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.dense.linear import Linear
 
-
-class Sage_conv(MessagePassing):
+class SAGEConv_update(MessagePassing):
     r"""The GraphSAGE operator from the `"Inductive Representation Learning on
     Large Graphs" <https://arxiv.org/abs/1706.02216>`_ paper
+
+    Note: SAGEConv first performs aggregation and then applies linear transformation, which is not memory efficient for datasets with high-dimensional original features (like coauthor-physics). 
+    So we manually create SAGEConv_update, which first applies linear transformation and then performs aggregation.
 
     .. math::
         \mathbf{x}^{\prime}_i = \mathbf{W}_1 \mathbf{x}_i + \mathbf{W}_2 \cdot
@@ -40,7 +42,7 @@ class Sage_conv(MessagePassing):
                  root_weight: bool = True,
                  bias: bool = True, **kwargs):  # yapf: disable
         kwargs.setdefault('aggr', 'mean')
-        super(Sage_conv, self).__init__(**kwargs)
+        super(SAGEConv_update, self).__init__(**kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels

@@ -1,17 +1,12 @@
 import random
-
-import numpy as np
-import torch
-from torch_geometric.utils import (negative_sampling, add_self_loops,
-                                   train_test_split_edges)
-from torch_geometric.data import Data, Dataset
-from torch_geometric.transforms import NormalizeFeatures, Compose, BaseTransform, ToDevice, RandomLinkSplit
-
 import math
-
-from torch_geometric import datasets
-
+import torch
+import numpy as np
 import subprocess
+from torch_geometric import datasets
+from torch_geometric.data import Data, Dataset
+from torch_geometric.utils import (negative_sampling, add_self_loops, train_test_split_edges)
+from torch_geometric.transforms import NormalizeFeatures, Compose, BaseTransform, ToDevice, RandomLinkSplit
 
 def get_gpu_memory_map():
     """Get the current gpu usage.
