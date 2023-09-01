@@ -5,29 +5,25 @@ This repository contains the source code for the paper: [Linkless Link Predictio
 <img width="1209" alt="image" src="https://user-images.githubusercontent.com/69767476/193711518-fdc8c163-7bbc-4118-ad55-75835954d2c7.png">
 
 ## Requirements
+Please run the following code to install all the requirements:
 ```
-- torch==1.12.1
-- torch-geometric==2.1.0
-- numpy
-- ogb==1.3.5
-- sklearn==1.1.2
-- python==3.9.13
+pip install -r requirements.txt
 ```
 
 ## Usage
 ### Transductive Setting 
 - **Teacher GNN training.** You can change "sage" to "mlp" to obtain supervised training results with MLP. 
 ```
-python main_sp.py --datasets=cora --encoder=sage --tranductive=tranductive
+python train_teacher_gnn.py --datasets=cora --encoder=sage --transductive=transductive
 ```
 To reproduce the supervised results shown in Table 2, you can just simply run the following command. The results will be shown in results/.
 ```
 cd scripts/
 bash supervised_transductive.sh
 ```
-- **Student MLP training.** KD_kl and KD_r indicate the weights for the distribution-based and rank-based matching KD, respectively.
+- **Student MLP training.** LLP_D and LLP_R indicate the weights for the distribution-based and rank-based matching KD, respectively.
 ```
-python main.py --datasets=cora --KD_kl=1 --KD_r=1 --True_label=1 --tranductive=tranductive
+python main.py --datasets=cora --LLP_D=1 --LLP_R=1 --True_label=1 --transductive=transductive
 ```
 To reproduce the results shown in Table 2, please run the following command:
 ```
@@ -36,22 +32,22 @@ bash KD_transductive.sh
 ```
 ### Production Setting
 - **Pre-process dataset**
-In this work, we design a new production setting to resemble the real-world link prediction scenario. For more details, please refer to our paper. Our split datasets are already saved in ../data folder. If you want to apply this setting on our own datasets or split the datsets by your self, please change the dataset name ("dataset") in Line 205 in generate_production_split.py file and run the following command:
+In this work, we design a new production setting to resemble the real-world link prediction scenario. This setting mimics practical link prediction use cases. Under the production setting, the newly occurred nodes and edges that can not be seen during the training stage would appear in the graph at inference time. For more details, please refer to our paper Appendix C.2. If you want to apply this setting on our own datasets or split the datsets by your self, please change the dataset name ("dataset") in Line 194 in generate_production_split.py file and run the following command:
 ```
 python generate_production_split.py
 ```
 - **Teacher GNN training.** Note: changing "sage" to "mlp" can reproduce the supervised training results with MLP.
 ```
-python main_sp_production.py --datasets=cora --encoder=sage --tranductive=production
+python train_teacher_gnn.py --datasets=cora --encoder=sage --transductive=production
 ```
 To reproduce the supervised results shown in Table 3, you can just simply run the following command. The results will be shown in results/.
 ```
 cd scripts/
 bash supervised_production.sh
 ```
-- **Student MLP training.** KD_kl and KD_r indicate the weights for the distribution-based and rank-based matching KD, respectively.
+- **Student MLP training.** LLP_D and LLP_R indicate the weights for the distribution-based and rank-based matching KD, respectively.
 ```
-python main_production.py --datasets=cora --KD_kl=1 --KD_r=1 --True_label=1 --tranductive=production
+python main.py --datasets=cora --LLP_D=1 --LLP_R=1 --True_label=1 --transductive=production
 ```
 To reproduce the results shown in Table 3, please run the following command:
 ```

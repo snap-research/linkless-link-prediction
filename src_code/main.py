@@ -52,7 +52,102 @@ def neighbor_samplers(row, col, sample, x, step, ps_method, ns_rate, hops):
     neg_batch = torch.randint(0, x.size(0), (batch.numel(), step*hops*ns_rate),
                                   dtype=torch.long)
 
-    return pos_batch.to(x.device), neg_batch.to(x.device)
+    return pos_batch.to("cuda"), neg_batch.to("cuda")
+
+def train_minibatch(model, predictor, t_h, teacher_predictor, data, split_edge, optimizer, args, device):
+    
+    if args.transductive:
+        pos_train_edge = split_edge['train']['edge']
+        row, col = data.adj_t
+    else:
+        pos_train_edge = data.edge_index.t()
+        row, col = data.edge_index
+
+    edge_index = torch.stack([col, row], dim=0)
+
+    model.train()
+    predictor.train()
+
+    mse_loss = nn.MSELoss()
+    bce_loss = nn.BCELoss()
+    margin_rank_loss = nn.MarginRankingLoss(margin=args.margin)
+
+    total_loss = total_examples = 0
+
+    node_loader = iter(DataLoader(range(data.x.size(0)), args.node_batch_size, shuffle=True))
+    for link_perm in DataLoader(range(pos_train_edge.size(0)), args.link_batch_size, shuffle=True):
+        optimizer.zero_grad()
+
+        node_perm = next(node_loader)
+
+        edge = pos_train_edge[link_perm].t()
+
+        if args.datasets != "collab":
+            neg_edge = negative_sampling(edge_index, num_nodes=data.x.size(0),
+                                 num_neg_samples=link_perm.size(0), method='dense')
+        elif args.datasets == "collab":
+            neg_edge = torch.randint(0, data.x.size()[0], [edge.size(0), edge.size(1)], dtype=torch.long)
+
+        train_edges = torch.cat((edge, neg_edge), dim=-1).to(device)
+
+        src = train_edges[0]
+        dst = train_edges[1]
+
+        # sampled the neary nodes and randomely sampled nodes 
+        sample_step = args.rw_step
+        pos_sample, neg_sample = neighbor_samplers(row, col, node_perm, data.x, sample_step, args.ps_method, args.ns_rate, args.hops)
+        samples = torch.cat((pos_sample, neg_sample), 1)
+        this_target = torch.cat((torch.reshape(samples, (-1,)), src, dst), 0)
+        h = model(data.x[this_target.to("cpu")].to(device))
+
+        ### calculate the distribution based matching loss 
+        for_loss = torch.reshape(h[:samples.size(0) * samples.size(1)], (samples.size(0), samples.size(1), args.hidden_channels))
+        src_h = h[samples.size(0) * samples.size(1): samples.size(0) * samples.size(1)+src.size(0)]
+        dst_h = h[samples.size(0) * samples.size(1)+src.size(0): ]
+
+        batch_emb = torch.reshape(for_loss[:,0,:], (samples[:,0].size(0), 1, h.size(1))).repeat(1,sample_step*args.hops*(1+args.ns_rate),1)
+        t_emb = torch.reshape(t_h[samples[:,0]].to(device), (samples[:,0].size(0), 1, t_h.size(1))).repeat(1,sample_step*args.hops*(1+args.ns_rate),1)
+        s_r = predictor(batch_emb, for_loss[:,1:,:])
+        t_r = teacher_predictor(t_emb, t_h[samples[:, 1:]].to(device))
+        llp_d_loss = KL_loss(torch.reshape(s_r, (s_r.size()[0], s_r.size()[1])), torch.reshape(t_r, (t_r.size()[0], t_r.size()[1])), 1)
+
+        #### calculate the rank based matching loss
+        rank_loss = torch.tensor(0.0).to(device)
+        sampled_nodes = [l_i for l_i in range(sample_step*args.hops*(1+args.ns_rate))]
+        dim_pairs = [x for x in itertools.combinations(sampled_nodes, r=2)]
+        dim_pairs = np.array(dim_pairs).T
+        teacher_rank_list = torch.zeros((len(t_r), dim_pairs.shape[1],1)).to(device)
+                    
+        mask = t_r[:, dim_pairs[0]] > (t_r[:, dim_pairs[1]] + args.margin)
+        teacher_rank_list[mask] = 1
+        mask2 = t_r[:, dim_pairs[0]] < (t_r[:, dim_pairs[1]] - args.margin)
+        teacher_rank_list[mask2] = -1
+        first_rank_list = s_r[:, dim_pairs[0]].squeeze()
+        second_rank_list = s_r[:, dim_pairs[1]].squeeze()
+        llp_r_loss = margin_rank_loss(first_rank_list, second_rank_list, teacher_rank_list.squeeze())
+        
+
+        train_label = torch.cat((torch.ones(edge.size()[1]), torch.zeros(neg_edge.size()[1])), dim=0).to(h.device)
+        out = predictor(src_h, dst_h).squeeze()
+        label_loss = bce_loss(out, train_label)
+       
+        if args.LLP_D or args.LLP_R:
+            loss = args.True_label * label_loss + args.LLP_D * llp_d_loss + args.LLP_R * llp_r_loss
+
+        loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(data.x, 1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(predictor.parameters(), 1.0)
+
+        optimizer.step()
+
+        num_examples = edge.size(1)
+        total_loss += loss.item() * num_examples
+        total_examples += num_examples
+        
+    return total_loss / total_examples
+
 
 def train(model, predictor, t_h, teacher_predictor, data, split_edge,
                          optimizer, args):
@@ -87,7 +182,7 @@ def train(model, predictor, t_h, teacher_predictor, data, split_edge,
         #     t_h = teacher_model(data.x, data.edge_index)
         edge = pos_train_edge[link_perm].t()
 
-        if args.KD_r or args.KD_kl:
+        if args.LLP_R or args.LLP_D:
             sample_step = args.rw_step
             # sampled the neary nodes and randomely sampled nodes
             pos_sample, neg_sample = neighbor_samplers(row, col, node_perm, data.x, sample_step, args.ps_method, args.ns_rate, args.hops)
@@ -98,7 +193,7 @@ def train(model, predictor, t_h, teacher_predictor, data, split_edge,
             t_emb = torch.reshape(t_h[samples[:,0]], (samples[:,0].size(0), 1, h.size(1))).repeat(1,sample_step*args.hops*(1+args.ns_rate),1)
             s_r = predictor(batch_emb, h[samples[:, 1:]])
             t_r = teacher_predictor(t_emb, t_h[samples[:, 1:]])
-            kd_distribution_loss = KL_loss(torch.reshape(s_r, (s_r.size()[0], s_r.size()[1])), torch.reshape(t_r, (t_r.size()[0], t_r.size()[1])), 1)
+            llp_d_loss = KL_loss(torch.reshape(s_r, (s_r.size()[0], s_r.size()[1])), torch.reshape(t_r, (t_r.size()[0], t_r.size()[1])), 1)
 
             #### calculate the rank based matching loss
             rank_loss = torch.tensor(0.0).to("cuda")
@@ -113,7 +208,7 @@ def train(model, predictor, t_h, teacher_predictor, data, split_edge,
             teacher_rank_list[mask2] = -1
             first_rank_list = s_r[:, dim_pairs[0]].squeeze()
             second_rank_list = s_r[:, dim_pairs[1]].squeeze()
-            kd_rank_loss = margin_rank_loss(first_rank_list, second_rank_list, teacher_rank_list.squeeze())
+            llp_r_loss = margin_rank_loss(first_rank_list, second_rank_list, teacher_rank_list.squeeze())
 
         if args.datasets != "collab":
             neg_edge = negative_sampling(edge_index, num_nodes=data.x.size(0),
@@ -129,10 +224,10 @@ def train(model, predictor, t_h, teacher_predictor, data, split_edge,
        
         t_out = teacher_predictor(t_h[train_edges[0]], t_h[train_edges[1]]).squeeze().detach()
 
-        if args.KD_kl or args.KD_r:
-            loss = args.True_label * label_loss + args.KD_f * cosine_loss(h[node_perm], t_h[node_perm]) + args.KD_p * mse_loss(out, t_out) + args.KD_kl * kd_distribution_loss + args.KD_r * kd_rank_loss
+        if args.LLP_D or args.LLP_R:
+            loss = args.True_label * label_loss + args.KD_RM * cosine_loss(h[node_perm], t_h[node_perm]) + args.KD_LM * mse_loss(out, t_out) + args.LLP_D * llp_d_loss + args.LLP_R * llp_r_loss
         else:
-            loss = args.True_label * label_loss + args.KD_f * cosine_loss(h[node_perm], t_h[node_perm]) + args.KD_p * mse_loss(out, t_out)
+            loss = args.True_label * label_loss + args.KD_RM * cosine_loss(h[node_perm], t_h[node_perm]) + args.KD_LM * mse_loss(out, t_out)
 
         loss.backward()
 
@@ -154,7 +249,10 @@ def test_transductive(model, predictor, data, split_edge, evaluator, batch_size,
     model.eval()
     predictor.eval()
 
-    h = model(data.x)
+    if args.minibatch:
+        h = model(data.x.to("cuda"))
+    else:
+        h = model(data.x)
 
     pos_valid_edge = split_edge['valid']['edge'].to(h.device)
     neg_valid_edge = split_edge['valid']['edge_neg'].to(h.device)
@@ -349,10 +447,10 @@ def main():
     parser.add_argument('--metric', type=str, default='Hits@20', choices=['auc', 'hits@20', 'hits@50'], help='main evaluation metric')
     parser.add_argument('--use_valedges_as_input', action='store_true')
     parser.add_argument('--True_label', default=0.1, type=float, help="true_label loss")
-    parser.add_argument('--KD_f', default=0, type=float, help="Representation-based matching KD") 
-    parser.add_argument('--KD_p', default=0, type=float, help="logit-based matching KD") 
-    parser.add_argument('--KD_kl', default=1, type=float, help="distribution-based matching kd")
-    parser.add_argument('--KD_r', default=1, type=float, help="rank-based matching kd") 
+    parser.add_argument('--KD_RM', default=0, type=float, help="Representation-based matching KD") 
+    parser.add_argument('--KD_LM', default=0, type=float, help="logit-based matching KD") 
+    parser.add_argument('--LLP_D', default=1, type=float, help="distribution-based matching kd")
+    parser.add_argument('--LLP_R', default=1, type=float, help="rank-based matching kd") 
     parser.add_argument('--margin', default=0.1, type=float, help="margin for rank-based kd") 
     parser.add_argument('--rw_step', type=int, default=3, help="nearby nodes sampled times")
     parser.add_argument('--ns_rate', type=int, default=1, help="randomly sampled rate over # nearby nodes") 
@@ -367,16 +465,17 @@ def main():
     Logger_file = "../results/" + args.datasets + "_KD_" + args.transductive + ".txt"
     file = open(Logger_file, "a")
     file.write(str(args)+"\n")
-    if args.KD_f != 0:
+    if args.KD_RM != 0:
         file.write("Logit-matching\n")
-    elif args.KD_p != 0:
+    elif args.KD_LM != 0:
         file.write("Representation-matching\n")
-    elif args.KD_kl != 0 or args.KD_r != 0:
+    elif args.LLP_D != 0 or args.LLP_R != 0:
         file.write("LLP (Relational Distillation)\n")
     file.close()
 
     device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
+    mini_batch_device = 'cpu'
 
     ### Prepare the datasets
     if args.transductive:
@@ -419,7 +518,10 @@ def main():
         else:
             data.full_adj_t = data.adj_t
 
-        data = data.to(device)
+        if args.minibatch:
+            data = data.to(mini_batch_device)
+        else:
+            data = data.to(device)
 
         args.node_batch_size = int(data.x.size()[0] / (split_edge['train']['edge'].size()[0] / args.link_batch_size))
 
@@ -427,7 +529,10 @@ def main():
         training_data, val_data, inference_data, data, test_edge_bundle, negative_samples = torch.load("../data/" + args.datasets + "_production.pkl")
         input_size = training_data.x.size(1)
 
-        training_data.to(device)
+        if args.minibatch:
+            training_data.to(mini_batch_device)
+        else:
+            training_data.to(device)
         val_data.to(device)
         inference_data.to(device)
 
@@ -440,20 +545,8 @@ def main():
     predictor = LinkPredictor(args.predictor, args.hidden_channels, args.hidden_channels, 1,
                               args.num_layers, args.dropout).to(device)
 
-    # if args.encoder == 'sage':
-    #     teacher_model = SAGE(args.datasets, input_size, args.hidden_channels,
-    #                     args.hidden_channels, args.num_layers,
-    #                     args.dropout).to(device)
-
-    # elif args.encoder == 'gcn':
-    #     teacher_model = GCN(input_size, args.hidden_channels,
-    #                     args.hidden_channels, args.num_layers,
-    #                     args.dropout).to(device)
-
     pretrained_model = torch.load("../saved_models/" + args.datasets + "-" + args.encoder + "_" + args.transductive + ".pkl")
 
-    # teacher_model.load_state_dict(pretrained_model['gnn'], strict=True)
-    # teacher_model.to(device)
     teacher_predictor = LinkPredictor(args.predictor, 256, 256, 1, 2, args.dropout)
     teacher_predictor.load_state_dict(pretrained_model['predictor'], strict=True)
     teacher_predictor.to(device)
@@ -461,8 +554,6 @@ def main():
     t_h = torch.load("../Saved_features/" + args.datasets + "-" + args.encoder + "_" + args.transductive + ".pkl")
     t_h = t_h['features']
 
-    # for para in teacher_model.parameters():
-    #     para.requires_grad=False
     for para in teacher_predictor.parameters():
         para.requires_grad=False
 
@@ -506,8 +597,12 @@ def main():
         best_val = 0.0
         for epoch in range(1, 1 + args.epochs):
             if args.transductive:
-                loss = train(model, predictor, t_h, teacher_predictor, data, split_edge,
+                if args.minibatch:
+                    loss = train_minibatch(model, predictor, t_h, teacher_predictor, data, split_edge,
                             optimizer, args, device)
+                else:
+                    loss = train(model, predictor, t_h, teacher_predictor, data, split_edge,
+                                optimizer, args, device)
                 
                 results = test_transductive(model, predictor, data, split_edge,
                             evaluator, args.link_batch_size, args.encoder, args.datasets)
