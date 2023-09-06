@@ -56,7 +56,7 @@ def neighbor_samplers(row, col, sample, x, step, ps_method, ns_rate, hops):
 
 def train_minibatch(model, predictor, t_h, teacher_predictor, data, split_edge, optimizer, args, device):
     
-    if args.transductive:
+    if args.transductive == "transductive":
         pos_train_edge = split_edge['train']['edge']
         row, col = data.adj_t
     else:
@@ -150,8 +150,8 @@ def train_minibatch(model, predictor, t_h, teacher_predictor, data, split_edge, 
 
 
 def train(model, predictor, t_h, teacher_predictor, data, split_edge,
-                         optimizer, args):
-    if args.transductive:
+                         optimizer, args, device):
+    if args.transductive == "transductive":
         pos_train_edge = split_edge['train']['edge'].to(data.x.device)
         row, col = data.adj_t
     else:
@@ -245,7 +245,7 @@ def train(model, predictor, t_h, teacher_predictor, data, split_edge,
 
 
 @torch.no_grad()
-def test_transductive(model, predictor, data, split_edge, evaluator, batch_size, encoder_name, dataset):
+def test_transductive(model, predictor, data, split_edge, evaluator, batch_size, encoder_name, dataset, args):
     model.eval()
     predictor.eval()
 
@@ -430,7 +430,7 @@ def main():
     parser = argparse.ArgumentParser(description='OGBL-DDI (GNN)')
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--log_steps', type=int, default=1)
-    parser.add_argument('--encoder', type=str, default='gcn')
+    parser.add_argument('--encoder', type=str, default='sage')
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--hidden_channels', type=int, default=256)
     parser.add_argument('--dropout', type=float, default=0.5)
@@ -478,7 +478,7 @@ def main():
     mini_batch_device = 'cpu'
 
     ### Prepare the datasets
-    if args.transductive:
+    if args.transductive == "transductive":
         if args.datasets != "collab":
             dataset = get_dataset(args.dataset_dir, args.datasets)
             data = dataset[0]
@@ -559,7 +559,7 @@ def main():
 
     evaluator = Evaluator(name='ogbl-ddi')
 
-    if args.transductive:
+    if args.transductive == "transductive":
         if args.datasets != "collab":
             loggers = {
                 'Hits@10': Logger(args.runs, args),
@@ -596,7 +596,7 @@ def main():
         cnt_wait = 0
         best_val = 0.0
         for epoch in range(1, 1 + args.epochs):
-            if args.transductive:
+            if args.transductive == "transductive":
                 if args.minibatch:
                     loss = train_minibatch(model, predictor, t_h, teacher_predictor, data, split_edge,
                             optimizer, args, device)
@@ -605,7 +605,7 @@ def main():
                                 optimizer, args, device)
                 
                 results = test_transductive(model, predictor, data, split_edge,
-                            evaluator, args.link_batch_size, args.encoder, args.datasets)
+                            evaluator, args.link_batch_size, args.encoder, args.datasets, args)
             
             else:
                 loss = train(model, predictor, t_h, teacher_predictor, training_data, None,
@@ -624,7 +624,7 @@ def main():
                 loggers[key].add_result(run, result)
 
             if epoch % args.log_steps == 0:
-                if args.transductive:
+                if args.transductive == "transductive":
                     for key, result in results.items():
                         valid_hits, test_hits = result
                         print(key)
@@ -657,7 +657,7 @@ def main():
     file = open(Logger_file, "a")
     file.write(f'All runs:\n')
 
-    if args.transductive:
+    if args.transductive == "transductive":
         for key in loggers.keys():
             print(key)
             loggers[key].print_statistics()

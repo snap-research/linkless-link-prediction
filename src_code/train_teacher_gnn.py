@@ -12,7 +12,7 @@ import torch_geometric.transforms as T
 
 from ogb.linkproppred import PygLinkPropPredDataset, Evaluator
 
-from logger import Logger, Logger_production
+from logger import Logger, ProductionLogger
 
 from utils import get_dataset, do_edge_split
 
@@ -278,7 +278,7 @@ def main():
     parser = argparse.ArgumentParser(description='OGBL-DDI (GNN)')
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--log_steps', type=int, default=1)
-    parser.add_argument('--encoder', type=str, default='gcn')
+    parser.add_argument('--encoder', type=str, default='sage')
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--hidden_channels', type=int, default=256)
     parser.add_argument('--dropout', type=float, default=0.5)
@@ -369,7 +369,7 @@ def main():
                 val_node_ratio = 0.1
                 val_ratio = 0.1
             training_data, val_data, inference_data, _, test_edge_bundle, negative_samples = do_production_edge_split(dset, args.datasets, test_ratio, val_node_ratio, val_ratio, old_old_extra_ratio)
-            torch.save(all_data, "../data/" + dataset + "_production.pkl")
+            torch.save((training_data, val_data, inference_data, _, test_edge_bundle, negative_samples), "../data/" + args.datasets + "_production.pkl")
         input_size = training_data.x.size(1)
         
         args.metric = 'Hits@20'
@@ -464,7 +464,7 @@ def main():
                 loggers[key].add_result(run, result)
 
             if epoch % args.log_steps == 0:
-                if args.transductive:
+                if args.transductive == "transductive":
                     for key, result in results.items():
                         valid_hits, test_hits = result
                         print(key)
@@ -500,7 +500,7 @@ def main():
         print(key)
         loggers[key].print_statistics()
         
-        if args.transductive:
+        if args.transductive == "transductive":
             file.write(f'{key}:\n')
             best_results = []
             for r in loggers[key].results:

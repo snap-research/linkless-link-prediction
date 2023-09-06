@@ -13,3 +13,5 @@ do
         python ../src_code/train_teacher_gnn.py --datasets=${dataset} --encoder=${encoder} --runs=10 --lr=0.001 --transductive=transductive
     done
 done
+
+python ../src_code/train_teacher_gnn.py --datasets=coauthor-physics --encoder=sage --runs=10 --lr=0.005 --transductive=transductive

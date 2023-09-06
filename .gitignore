@@ -1,4 +1,6 @@
 src_code/__pycache__/
 .ipynb_checkpoints/
-
-rm 
+results/
+data/
+Saved_features/
+saved_models/
