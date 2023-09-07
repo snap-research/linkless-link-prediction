@@ -395,7 +395,7 @@ def main():
         model = MLP(args.num_layers, input_size, args.hidden_channels, args.hidden_channels, args.dropout).to(device)
 
     predictor = LinkPredictor(args.predictor, args.hidden_channels, args.hidden_channels, 1,
-                              args.num_layers, args.dropout).to(device)
+                              2, args.dropout).to(device)
 
     evaluator = Evaluator(name='ogbl-ddi')
     if args.transductive == "transductive":

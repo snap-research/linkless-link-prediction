@@ -54,6 +54,11 @@ To reproduce the results shown in Table 3, please run the following command:
 cd scripts/
 bash KD_production.sh
 ```
+### Reproducing Paper Results
+In our experiments, we found that the link prediction performance (when evaluated with Hits@K) of models can greatly vary even when run with the same hyperparameters. Besides, the performance of our method is sensitive to the teacher GNN. Therefore, as mentioned in our paper, we run a hyperparameter sweep for each setting and report the results from the best-performing model (as measured by validation Hits@K).
+
+We conducted a random search across the hyperparameters with [Weights & Biases](https://wandb.ai/home). The sweep configuration files can be found [here](./configurations/).
+
 ## Reference
 If you find our work useful, please cite the following:
 ```bibtex

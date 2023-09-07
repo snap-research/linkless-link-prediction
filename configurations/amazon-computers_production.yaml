@@ -1,0 +1,90 @@
+method: random
+metric:
+  goal: maximize
+  name: Hits@20
+parameters:
+  KD_RM:
+    values:
+      - 0
+  LLP_D:
+    values:
+      - 0.001
+      - 0.01
+      - 0.1
+      - 1
+      - 10
+      - 100
+      - 1000
+  KD_LM:
+    values:
+      - 0
+  LLP_R:
+    values:
+      - 0.001
+      - 0.01
+      - 0.1
+      - 1
+      - 10
+      - 100
+      - 1000
+  True_label:
+    values:
+      - 0.001
+      - 0.01
+      - 0.1
+      - 1
+      - 10
+      - 100
+      - 1000
+  datasets:
+    values:
+      - amazon-computers
+  dropout:
+    values:
+      - 0
+      - 0.5
+  encoder:
+    values:
+      - sage
+  hidden_channels:
+    values:
+      - 256
+      - 512
+  hops:
+    values:
+      - 1
+      - 2
+      - 3
+  lr:
+    values:
+      - 0.001
+      - 0.005
+  margin:
+    values:
+      - 0.05
+      - 0.1
+      - 0.2
+  ns_rate:
+    values:
+      - 1
+      - 3
+      - 5
+      - 10
+  patience:
+    values:
+      - 100
+  ps_method:
+    values:
+      - nb
+  runs:
+    values:
+      - 10
+  rw_step:
+    values:
+      - 1
+      - 2
+      - 3
+  transductive:
+    values:
+      - production
+program: main.py
