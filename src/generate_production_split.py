@@ -1,5 +1,4 @@
 import random
-
 import numpy as np
 import torch
 from torch_geometric.data import Data, Dataset
@@ -8,54 +7,6 @@ from torch_geometric.utils import (negative_sampling, add_self_loops, train_test
 from torch.nn.functional import one_hot
 import math
 from ogb.linkproppred import PygLinkPropPredDataset
-
-def add_node_feats(data, device, type='degree'):
-    assert (type == 'degree')
-
-    G = to_networkx(data)
-    degrees = torch.tensor([v for (_, v) in G.degree()])
-    data.x = one_hot(degrees).to(device).float()
-    return data
-
-def perform_subset_negative_sampling(node_mask, pos_index):
-    device = node_mask.device
-    n_selected = node_mask.sum().item()
-    # first, create relabeled edge index starting at 0
-    new_mapping = torch.zeros(node_mask.size(), dtype=pos_index.dtype, device=device)
-    new_mapping[node_mask] = torch.arange(n_selected, device=device)
-
-    inverse_mapping = torch.arange(node_mask.size(0), device=device)[node_mask]
-    
-    relabeled_index = new_mapping[pos_index]
-    neg_relabeled_index = negative_sampling(relabeled_index, n_selected, pos_index.size(1), force_undirected=True)
-    return inverse_mapping[neg_relabeled_index]
-
-def perform_subset_bipartite_negative_sampling(node_mask_src, node_mask_dst, pos_index):
-    device = node_mask_src.device
-    n_selected_src = node_mask_src.sum().item()
-    n_selected_dst = node_mask_dst.sum().item()
-
-    # relabel edge index so that we only have edges from old -> new, not new -> old
-    reorder_mask = node_mask_dst[pos_index[0, :]]
-    old_srcs = pos_index[0, reorder_mask].clone()
-    pos_index[0, reorder_mask] = pos_index[1, reorder_mask]
-    pos_index[1, reorder_mask] = old_srcs
-
-    # first, create relabeled edge index starting at 0
-    new_mapping_src = torch.zeros(node_mask_src.size(), dtype=pos_index.dtype, device=device)
-    new_mapping_src[node_mask_src] = torch.arange(n_selected_src, device=device)
-    inverse_mapping_src = torch.arange(node_mask_src.size(0), device=device)[node_mask_src]
-
-    new_mapping_dst = torch.zeros(node_mask_dst.size(), dtype=pos_index.dtype, device=device)
-    new_mapping_dst[node_mask_dst] = torch.arange(n_selected_dst, device=device)
-    inverse_mapping_dst = torch.arange(node_mask_dst.size(0), device=device)[node_mask_dst]
-    
-    relabeled_index_src = new_mapping_src[pos_index[0]]
-    relabeled_index_dst = new_mapping_dst[pos_index[1]]
-    relabeled_index = torch.vstack((relabeled_index_src, relabeled_index_dst))
-
-    neg_relabeled_index = negative_sampling(relabeled_index, (n_selected_src, n_selected_dst), pos_index.size(1))
-    return torch.vstack((inverse_mapping_src[neg_relabeled_index[0]], inverse_mapping_dst[neg_relabeled_index[1]]))
 
 def create_mask(base_mask, rows, cols):
     return base_mask[rows] & base_mask[cols]

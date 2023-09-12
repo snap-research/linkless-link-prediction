@@ -1,6 +1,5 @@
 import torch
 
-
 class Logger(object):
     """
     Logger for the transductive setting, where we record the overall result only.

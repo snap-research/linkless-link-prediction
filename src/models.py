@@ -1,9 +1,7 @@
 import torch
 import torch.nn as nn
-
 from torch_geometric.nn import GCNConv, SAGEConv, GATConv, APPNP
 import torch.nn.functional as F
-from sageconv_updated import SAGEConv_update
 
 class MLP(nn.Module):
     def __init__(
@@ -94,27 +92,6 @@ class SAGE(torch.nn.Module):
         elif self.norm_type == "layer":
             self.norms.append(nn.LayerNorm(hidden_channels))            
 
-        ##### SAGEConv first performs aggregation and then applies linear transformation, which is not memory efficient for datasets with high-dimensional original features (like coauthor-physics). 
-        ##### SAGEConv_update first applies linear transformation and then performs aggregation.
-        # if data_name == "coauthor-physics":
-        #     self.convs.append(SAGEConv_update(in_channels, hidden_channels))
-        #     for _ in range(num_layers - 2):
-        #         self.convs.append(SAGEConv_update(hidden_channels, hidden_channels))
-        #         if self.norm_type == "batch":
-        #             self.norms.append(nn.BatchNorm1d(hidden_channels))
-        #         elif self.norm_type == "layer":
-        #             self.norms.append(nn.LayerNorm(hidden_channels))
-        #     self.convs.append(SAGEConv_update(hidden_channels, out_channels))
-        # else:
-        #     self.convs.append(SAGEConv(in_channels, hidden_channels))
-        #     for _ in range(num_layers - 2):
-        #         self.convs.append(SAGEConv(hidden_channels, hidden_channels))
-        #         if self.norm_type == "batch":
-        #             self.norms.append(nn.BatchNorm1d(hidden_channels))
-        #         elif self.norm_type == "layer":
-        #             self.norms.append(nn.LayerNorm(hidden_channels))
-        #     self.convs.append(SAGEConv(hidden_channels, out_channels))
-
         self.convs.append(conv_layer(in_channels, hidden_channels))
         for _ in range(num_layers - 2):
             self.convs.append(conv_layer(hidden_channels, hidden_channels))
@@ -170,34 +147,4 @@ class LinkPredictor(torch.nn.Module):
         elif self.predictor == 'inner':
             x = torch.sum(x, dim=-1)
 
-        return torch.sigmoid(x)
-
-class Teacher_LinkPredictor(torch.nn.Module):
-    def __init__(self, predictor, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout):
-        super(Teacher_LinkPredictor, self).__init__()
-
-        self.predictor = predictor
-        self.lins = torch.nn.ModuleList()
-        self.lins.append(torch.nn.Linear(in_channels, hidden_channels))
-        for _ in range(num_layers - 2):
-            self.lins.append(torch.nn.Linear(hidden_channels, hidden_channels))
-        self.lins.append(torch.nn.Linear(hidden_channels, out_channels))
-
-        self.dropout = dropout
-
-    def reset_parameters(self):
-        for lin in self.lins:
-            lin.reset_parameters()
-
-    def forward(self, x_i, x_j):
-        x = x_i * x_j
-        if self.predictor == 'mlp':
-            for lin in self.lins[:-1]:
-                x = lin(x)
-                x = F.relu(x)
-                x = F.dropout(x, p=self.dropout, training=self.training)
-            x = self.lins[-1](x)
-        elif self.predictor == 'inner':
-            x = torch.sum(x, dim=-1)
         return torch.sigmoid(x)

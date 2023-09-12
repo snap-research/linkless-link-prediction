@@ -70,11 +70,6 @@ def do_edge_split(dataset, fast_split=False, val_ratio=0.05, test_ratio=0.1):
         data.train_neg_edge_index = negative_sampling(
             edge_index, num_nodes=data.num_nodes,
             num_neg_samples=data.train_pos_edge_index.size(1))
-
-        # print(data.train_pos_edge_index.size())
-        # print(data.val_pos_edge_index.size())
-        # print(data.test_pos_edge_index.size())
-        # raise TypeError
     else:
         num_nodes = data.num_nodes
         row, col = data.edge_index
@@ -108,47 +103,6 @@ def do_edge_split(dataset, fast_split=False, val_ratio=0.05, test_ratio=0.1):
     split_edge['test']['edge'] = data.test_pos_edge_index.t()
     split_edge['test']['edge_neg'] = data.test_neg_edge_index.t()
     return split_edge
-
-
-def do_edge_split_products(dataset, fast_split=False, val_ratio=0.05, test_ratio=0.1):
-    data = dataset[0]
-    random.seed(234)
-    torch.manual_seed(234)
-
-    splitter = RandomLinkSplit(num_val=val_ratio, num_test=test_ratio)
-    training_data, val_data, test_data = splitter(data)
-
-    split_edge = {'train': {}, 'valid': {}, 'test': {}}
-    split_edge['train']['edge'] = training_data.edge_label_index[:,:105160538].t()
-    split_edge['train']['edge_neg'] = training_data.edge_label_index[:,105160538:].t()
-    split_edge['valid']['edge'] = val_data.edge_label_index[:,:int(val_data.edge_label.sum())].t()
-    split_edge['valid']['edge_neg'] = val_data.edge_label_index[:,int(val_data.edge_label.sum()):].t()
-    split_edge['test']['edge'] = test_data.edge_label_index[:,:int(test_data.edge_label.sum())].t()
-    split_edge['test']['edge_neg'] = test_data.edge_label_index[:,int(test_data.edge_label.sum()):].t()
-
-    return training_data.edge_index, split_edge
-
-def do_edge_split_weibo(data, fast_split=False, val_ratio=0.05, test_ratio=0.1):
-    random.seed(234)
-    torch.manual_seed(234)
-
-    data.x = data.x.to(torch.float32)
-    # data.edge_index = data.edge_index.to(torch.int32)
-    splitter = RandomLinkSplit(num_val=val_ratio, num_test=test_ratio, is_undirected=True)
-    training_data, val_data, test_data = splitter(data)
-
-    split_edge = {'train': {}, 'valid': {}, 'test': {}}
-    split_edge['train']['edge'] = training_data.edge_label_index[:,:23148893].t()
-    split_edge['train']['edge_neg'] = training_data.edge_label_index[:,23148893:].t()
-    split_edge['valid']['edge'] = val_data.edge_label_index[:,:int(val_data.edge_label.sum())].t()
-    split_edge['valid']['edge_neg'] = val_data.edge_label_index[:,int(val_data.edge_label.sum()):].t()
-    split_edge['test']['edge'] = test_data.edge_label_index[:,:int(test_data.edge_label.sum())].t()
-    split_edge['test']['edge_neg'] = test_data.edge_label_index[:,int(test_data.edge_label.sum()):].t()
-
-    data.adj_t = training_data.edge_index
-    data.edge_index = training_data.edge_index
-    # import ipdb; ipdb.set_trace()
-    return data, split_edge
 
 def randomly_drop_nodes_citation2(dataset, keep_rate):
     data = dataset[0]

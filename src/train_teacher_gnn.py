@@ -1,23 +1,17 @@
 import argparse
-
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch_geometric.utils import negative_sampling
-
 import torch_geometric
-
 import torch_geometric.transforms as T
-
 from ogb.linkproppred import PygLinkPropPredDataset, Evaluator
-
 from logger import Logger, ProductionLogger
-
 from utils import get_dataset, do_edge_split
-
 from models import MLP, GCN, SAGE, LinkPredictor
-from sageconv_updated import SAGEConv_update
+from sageconv_updated import SAGEConv_updated
 from torch_geometric.nn import SAGEConv
 from torch_sparse import SparseTensor
 from sklearn.metrics import *
@@ -30,16 +24,13 @@ def train(model, predictor, data, split_edge, optimizer, batch_size, encoder_nam
         pos_train_edge = split_edge['train']['edge'].to(data.x.device)
     else:
         row, col = data.edge_index
-        pos_train_edge = data.edge_index.t()
-        
+        pos_train_edge = data.edge_index.t()        
     edge_index = torch.stack([col, row], dim=0)
 
     model.train()
     predictor.train()
 
     bce_loss = nn.BCELoss()
-
-
     total_loss = total_examples = 0
     for perm in DataLoader(range(pos_train_edge.size(0)), batch_size,
                            shuffle=True):
@@ -83,12 +74,15 @@ def train(model, predictor, data, split_edge, optimizer, batch_size, encoder_nam
 
 
 @torch.no_grad()
-def test_transductive(model, predictor, data, split_edge, evaluator, batch_size, encoder_name, dataset):
+def test_transductive(model, predictor, data, split_edge, evaluator, batch_size, encoder_name, dataset, args):
     model.eval()
     predictor.eval()
 
     if encoder_name == 'mlp':
-        h = model(data.x)
+        if args.minibatch:
+            h = model(data.x.to("cuda"))
+        else:
+            h = model(data.x)
     else:
         h = model(data.x, data.adj_t)
 
@@ -125,7 +119,6 @@ def test_transductive(model, predictor, data, split_edge, evaluator, batch_size,
     if dataset != "collab":
         for K in [10, 20, 30, 50]:
             evaluator.K = K
- 
             valid_hits = evaluator.eval({
                 'y_pred_pos': pos_valid_pred,
                 'y_pred_neg': neg_valid_pred,
@@ -296,10 +289,10 @@ def main():
     parser.add_argument('--transductive', type=str, default='transductive', choices=['transductive', 'production'])
     parser.add_argument('--minibatch', action='store_true')
 
-
     args = parser.parse_args()
     print(args)
 
+    os.makedirs("../results", exist_ok=True)
     Logger_file = "../results/" + args.datasets + "_supervised_" + args.transductive + ".txt"
     file = open(Logger_file, "a")
     file.write(str(args))
@@ -354,6 +347,7 @@ def main():
         if exists("../data/" + args.datasets + "_production.pkl"):
             training_data, val_data, inference_data, _, test_edge_bundle, negative_samples = torch.load("../data/" + args.datasets + "_production.pkl")
         else:
+            print("splitting the datasets now...")
             dset = get_dataset('../data', args.datasets)
             ## testing edges ratio (0.3 for cora and citeseer, 0.1 for other datasets)
             test_ratio=0.3
@@ -382,7 +376,7 @@ def main():
         if args.datasets == "coauthor-physics":
             model = SAGE(args.datasets, input_size, args.hidden_channels,
                         args.hidden_channels, args.num_layers,
-                        args.dropout, SAGEConv_update).to(device)
+                        args.dropout, SAGEConv_updated).to(device)
         else:
             model = SAGE(args.datasets, input_size, args.hidden_channels,
                         args.hidden_channels, args.num_layers,
@@ -441,7 +435,7 @@ def main():
                             optimizer, args.batch_size, args.encoder, args.datasets, args.transductive)
                 
                 results, h = test_transductive(model, predictor, data, split_edge,
-                            evaluator, args.batch_size, args.encoder, args.datasets)
+                            evaluator, args.batch_size, args.encoder, args.datasets, args)
             else:
                 loss = train(model, predictor, training_data, None,
                          optimizer, args.batch_size, args.encoder, args.datasets, args.transductive)
@@ -451,9 +445,11 @@ def main():
 
             if results[args.metric][0] > val_max:
                 val_max = results[args.metric][0]
-                if args.encoder == 'sage':
-                    torch.save({'features': h}, "../Saved_features/" + args.datasets + "-" + args.encoder + "_" + args.transductive + ".pkl")
-                    torch.save({'gnn': model.state_dict(), 'predictor': predictor.state_dict()}, "../saved_models/" + args.datasets + "-" + args.encoder + "_" + args.transductive + ".pkl")
+                if args.encoder != 'mlp':
+                    os.makedirs("../saved-features", exist_ok=True)
+                    os.makedirs("../saved-models", exist_ok=True)
+                    torch.save({'features': h}, "../saved-features/" + args.datasets + "-" + args.encoder + "_" + args.transductive + ".pkl")
+                    torch.save({'gnn': model.state_dict(), 'predictor': predictor.state_dict()}, "../saved-models/" + args.datasets + "-" + args.encoder + "_" + args.transductive + ".pkl")
             if results[args.metric][0] >= best_val:
                 best_val = results[args.metric][0]
                 cnt_wait = 0
@@ -539,5 +535,5 @@ def main():
             file.write(f'   Final new_new: {r.mean():.2f} ± {r.std():.2f}\n')
     file.close()
 
-
-main()
+if __name__ == "__main__":
+    main()

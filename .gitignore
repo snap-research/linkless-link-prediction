@@ -2,5 +2,5 @@ src_code/__pycache__/
 .ipynb_checkpoints/
 results/
 data/
-Saved_features/
-saved_models/
+saved-features/
+saved-models/

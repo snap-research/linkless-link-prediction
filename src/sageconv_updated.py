@@ -1,18 +1,17 @@
 from typing import Union, Tuple
 from torch_geometric.typing import OptPairTensor, Adj, Size
-
 from torch import Tensor
 import torch.nn.functional as F
 from torch_sparse import SparseTensor, matmul
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.dense.linear import Linear
 
-class SAGEConv_update(MessagePassing):
+class SAGEConv_updated(MessagePassing):
     r"""The GraphSAGE operator from the `"Inductive Representation Learning on
     Large Graphs" <https://arxiv.org/abs/1706.02216>`_ paper
 
     Note: SAGEConv first performs aggregation and then applies linear transformation, which is not memory efficient for datasets with high-dimensional original features (like coauthor-physics). 
-    So we manually create SAGEConv_update, which first applies linear transformation and then performs aggregation.
+    So we manually create SAGEConv_updated, which first applies linear transformation and then performs aggregation.
 
     .. math::
         \mathbf{x}^{\prime}_i = \mathbf{W}_1 \mathbf{x}_i + \mathbf{W}_2 \cdot
@@ -42,7 +41,7 @@ class SAGEConv_update(MessagePassing):
                  root_weight: bool = True,
                  bias: bool = True, **kwargs):  # yapf: disable
         kwargs.setdefault('aggr', 'mean')
-        super(SAGEConv_update, self).__init__(**kwargs)
+        super(SAGEConv_updated, self).__init__(**kwargs)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -68,10 +67,6 @@ class SAGEConv_update(MessagePassing):
         """"""
         if isinstance(x, Tensor):
             x: OptPairTensor = (x, x)
-
-        # propagate_type: (x: OptPairTensor)
-        # out = self.propagate(edge_index, x=x, size=size)
-        # out = self.lin_l(out)
 
         out = self.lin_l(x[0])
         out = self.propagate(edge_index, x=(out,out),size=size)
