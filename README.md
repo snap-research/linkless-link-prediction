@@ -71,3 +71,6 @@ If you find our work useful, please cite the following:
   organization={PMLR}
 }
 ```
+
+## Contact
+Please contact zguo5@nd.edu if you have any questions.
