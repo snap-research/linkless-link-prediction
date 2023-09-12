@@ -1,0 +1,75 @@
+method: random
+metric:
+  goal: maximize
+  name: Hits@50
+parameters:
+  KD_RM:
+    values:
+      - 0
+  LLP_D:
+    values:
+      - 0
+      - 1
+  KD_LM:
+    values:
+      - 0
+  LLP_R:
+    values:
+      - 0
+      - 1
+  True_label:
+    values:
+      - 1
+  datasets:
+    values:
+      - collab
+  dropout:
+    values:
+      - 0
+  encoder:
+    values:
+      - sage
+  hidden_channels:
+    values:
+      - 1024
+      - 2048
+  hops:
+    values:
+      - 3
+      - 5
+      - 10
+      - 15
+  lr:
+    values:
+      - 0.001
+      - 0.0005
+  margin:
+    values:
+      - 0.01
+      - 0.05
+      - 0.1
+      - 0.2
+  ns_rate:
+    values:
+      - 3
+      - 5
+      - 10
+      - 15
+  patience:
+    values:
+      - 100
+  ps_method:
+    values:
+      - nb
+  runs:
+    values:
+      - 10
+  rw_step:
+    values:
+      - 1
+      - 2
+      - 3
+  transductive:
+    values:
+      - transductive
+program: main.py
